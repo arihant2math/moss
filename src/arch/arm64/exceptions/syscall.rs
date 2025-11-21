@@ -6,17 +6,8 @@ use crate::{
         pipe::sys_pipe2,
         syscalls::{
             at::{
-                access::{sys_faccessat, sys_faccessat2},
-                open::sys_openat,
-                stat::sys_newfstatat,
-            },
-            close::sys_close,
-            ioctl::sys_ioctl,
-            iov::{sys_readv, sys_writev},
-            rw::{sys_read, sys_write},
-            seek::sys_lseek,
-            splice::sys_sendfile,
-            stat::sys_fstat,
+                access::{sys_faccessat, sys_faccessat2}, open::sys_openat, readlink::sys_readlinkat, stat::sys_newfstatat
+            }, chdir::sys_chdir, close::sys_close, ioctl::sys_ioctl, iov::{sys_readv, sys_writev}, rw::{sys_read, sys_write}, seek::sys_lseek, splice::sys_sendfile, stat::sys_fstat
         },
     },
     kernel::uname::sys_uname,
@@ -36,12 +27,17 @@ use crate::{
         },
         sleep::sys_nanosleep,
         thread_group::{
-            Pgid, pid::{sys_getpgid, sys_getpid, sys_getppid, sys_setpgid}, rsrc_lim::sys_prlimit64, signal::{
+            Pgid,
+            pid::{sys_getpgid, sys_getpid, sys_getppid, sys_setpgid},
+            rsrc_lim::sys_prlimit64,
+            signal::{
                 kill::{sys_kill, sys_tkill},
                 sigaction::sys_rt_sigaction,
                 sigaltstack::sys_sigaltstack,
                 sigprocmask::sys_rt_sigprocmask,
-            }, umask::sys_umask, wait::sys_wait4
+            },
+            umask::sys_umask,
+            wait::sys_wait4,
         },
         threading::sys_set_tid_address,
     },
@@ -77,6 +73,7 @@ pub async fn handle_syscall() {
         0x19 => sys_fcntl(arg1.into(), arg2 as _, arg3 as _).await,
         0x1d => sys_ioctl(arg1.into(), arg2 as _, arg3 as _).await,
         0x30 => sys_faccessat(arg1.into(), TUA::from_value(arg2 as _), arg3 as _).await,
+        0x31 => sys_chdir(TUA::from_value(arg1 as _)).await,
         0x38 => {
             sys_openat(
                 arg1.into(),
