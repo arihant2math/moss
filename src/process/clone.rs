@@ -1,5 +1,7 @@
 use crate::{
-    process::{TASK_LIST, Task, TaskState}, sched::{self, current_task}, sync::SpinLock
+    process::{TASK_LIST, Task, TaskState},
+    sched::{self, current_task},
+    sync::SpinLock,
 };
 use bitflags::bitflags;
 use libkernel::{

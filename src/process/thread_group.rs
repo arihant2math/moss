@@ -18,8 +18,8 @@ pub mod builder;
 pub mod pid;
 pub mod rsrc_lim;
 pub mod signal;
-pub mod wait;
 pub mod umask;
+pub mod wait;
 
 /// Task Group ID. In user-space this is the same as a Process ID (PID).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

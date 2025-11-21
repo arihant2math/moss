@@ -17,7 +17,6 @@ macro_rules! process_iovec {
         async {
             let mut total_bytes = 0;
             for vec in $iovecs {
-
                 if vec.iov_len == 0 {
                     continue;
                 }

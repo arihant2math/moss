@@ -1,7 +1,12 @@
 //! A module for sending messages between CPUs, utilising IPIs.
 
 use crate::{
-    arch::ArchImpl, drivers::Driver, kernel::kpipe::KBuf, process::Task, sched, sync::{OnceLock, SpinLock}
+    arch::ArchImpl,
+    drivers::Driver,
+    kernel::kpipe::KBuf,
+    process::Task,
+    sched,
+    sync::{OnceLock, SpinLock},
 };
 use alloc::{sync::Arc, vec::Vec};
 use libkernel::{

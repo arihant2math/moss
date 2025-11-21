@@ -6,8 +6,19 @@ use crate::{
         pipe::sys_pipe2,
         syscalls::{
             at::{
-                access::{sys_faccessat, sys_faccessat2}, open::sys_openat, readlink::sys_readlinkat, stat::sys_newfstatat
-            }, chdir::sys_chdir, close::sys_close, ioctl::sys_ioctl, iov::{sys_readv, sys_writev}, rw::{sys_read, sys_write}, seek::sys_lseek, splice::sys_sendfile, stat::sys_fstat
+                access::{sys_faccessat, sys_faccessat2},
+                open::sys_openat,
+                readlink::sys_readlinkat,
+                stat::sys_newfstatat,
+            },
+            chdir::sys_chdir,
+            close::sys_close,
+            ioctl::sys_ioctl,
+            iov::{sys_readv, sys_writev},
+            rw::{sys_read, sys_write},
+            seek::sys_lseek,
+            splice::sys_sendfile,
+            stat::sys_fstat,
         },
     },
     kernel::uname::sys_uname,
