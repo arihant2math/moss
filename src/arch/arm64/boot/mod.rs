@@ -126,7 +126,7 @@ fn arch_init_stage2(frame: *mut ExceptionState) -> *mut ExceptionState {
     cpu_messenger_init(cpu_count());
 
     kmain(
-        "--init=/bin/bash --rootfs=fat32fs --automount=/dev,devfs".to_string(),
+        "--init=/bin/bash --rootfs=fat32fs --automount=/dev,devfs,/tmp,tmpfs".to_string(),
         frame,
     );
 

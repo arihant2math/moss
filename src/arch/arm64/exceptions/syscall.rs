@@ -270,10 +270,12 @@ pub async fn handle_syscall() {
             )
             .await
         }
-        _ => panic!(
-            "Unhandled syscall 0x{nr:x}, PC: 0x{:x}",
-            current_task().ctx.lock_save_irq().user().elr_el1
-        ),
+        _ => {
+            panic!(
+                "Unhandled syscall 0x{nr:x}, PC: 0x{:x}",
+                current_task().ctx.lock_save_irq().user().elr_el1
+            )
+        },
     };
 
     let ret_val = match res {
