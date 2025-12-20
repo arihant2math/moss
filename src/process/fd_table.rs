@@ -1,6 +1,7 @@
 use crate::{fs::open_file::OpenFile, memory::uaccess::UserCopyable};
 use alloc::{sync::Arc, vec::Vec};
 use libkernel::error::{FsError, Result};
+use crate::net::OpenSocket;
 
 pub mod dup;
 pub mod fcntl;
@@ -40,8 +41,26 @@ bitflags::bitflags! {
 }
 
 #[derive(Clone)]
+pub enum FileDescriptorEntryInner {
+    OpenFile(Arc<OpenFile>),
+    Socket(Arc<OpenSocket>)
+}
+
+impl From<Arc<OpenFile>> for FileDescriptorEntryInner {
+    fn from(file: Arc<OpenFile>) -> Self {
+        Self::OpenFile(file)
+    }
+}
+
+impl From<Arc<OpenSocket>> for FileDescriptorEntryInner {
+    fn from(socket: Arc<OpenSocket>) -> Self {
+        Self::Socket(socket)
+    }
+}
+
+#[derive(Clone)]
 pub struct FileDescriptorEntry {
-    file: Arc<OpenFile>,
+    file: FileDescriptorEntryInner,
     flags: FdFlags,
 }
 
@@ -65,21 +84,37 @@ impl FileDescriptorTable {
             next_fd_hint: 0,
         }
     }
-
-    /// Gets the file object associated with a given file descriptor.
-    pub fn get(&self, fd: Fd) -> Option<Arc<OpenFile>> {
+    /// Gets the file descriptor entry associated with a given file descriptor, if any.
+    pub fn get(&self, fd: Fd) -> Option<FileDescriptorEntryInner> {
         self.entries
             .get(fd.0 as usize)
             .and_then(|entry| entry.as_ref())
             .map(|entry| entry.file.clone())
     }
 
+    /// Gets the file object associated with a given file descriptor, if any.
+    pub fn get_file(&self, fd: Fd) -> Option<Arc<OpenFile>> {
+        self.get(fd)
+            .map(|inner| match inner {
+                FileDescriptorEntryInner::OpenFile(file) => Some(file.clone()),
+                _ => None,
+            })?
+    }
+
+    pub fn get_socket(&self, fd: Fd) -> Option<Arc<OpenSocket>> {
+        self.get(fd)
+            .map(|inner| match inner {
+                FileDescriptorEntryInner::Socket(socket) => Some(socket.clone()),
+                _ => None,
+            })?
+    }
+
     /// Inserts a new file into the table, returning the new file descriptor.
-    pub fn insert(&mut self, file: Arc<OpenFile>) -> Result<Fd> {
+    pub fn insert(&mut self, file: impl Into<FileDescriptorEntryInner>) -> Result<Fd> {
         let fd = self.find_free_fd()?;
 
         let entry = FileDescriptorEntry {
-            file,
+            file: file.into(),
             flags: FdFlags::default(),
         };
 
@@ -103,7 +138,7 @@ impl FileDescriptorTable {
 
     /// Removes a file descriptor from the table, returning the file if it
     /// existed.
-    pub fn remove(&mut self, fd: Fd) -> Option<Arc<OpenFile>> {
+    pub fn remove(&mut self, fd: Fd) -> Option<FileDescriptorEntryInner> {
         let fd_idx = fd.0 as usize;
 
         if let Some(entry) = self.entries.get_mut(fd_idx)

@@ -84,7 +84,7 @@ pub async fn sys_pselect6(
         let file = task
             .fd_table
             .lock_save_irq()
-            .get(fd)
+            .get_file(fd)
             .ok_or(KernelError::BadFd)?;
 
         read_fds.push((
@@ -184,7 +184,7 @@ pub async fn sys_ppoll(
 
         poll_fds
             .iter()
-            .map(|poll_fd| fd_table.get(poll_fd.fd).ok_or(KernelError::BadFd))
+            .map(|poll_fd| fd_table.get_file(poll_fd.fd).ok_or(KernelError::BadFd))
             .collect::<Result<Vec<_>>>()?
     };
 

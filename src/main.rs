@@ -41,6 +41,7 @@ mod memory;
 mod process;
 mod sched;
 mod sync;
+mod net;
 
 #[panic_handler]
 fn on_panic(info: &PanicInfo) -> ! {
