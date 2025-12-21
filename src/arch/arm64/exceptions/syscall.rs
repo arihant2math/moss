@@ -11,9 +11,11 @@ use crate::{
         syscalls::{
             at::{
                 access::{sys_faccessat, sys_faccessat2},
+                link::sys_linkat,
                 mkdir::sys_mkdirat,
                 open::sys_openat,
                 readlink::sys_readlinkat,
+                rename::sys_renameat,
                 stat::sys_newfstatat,
                 unlink::sys_unlinkat,
             },
@@ -97,6 +99,24 @@ pub async fn handle_syscall() {
         0x1d => sys_ioctl(arg1.into(), arg2 as _, arg3 as _).await,
         0x22 => sys_mkdirat(arg1.into(), TUA::from_value(arg2 as _), arg3 as _).await,
         0x23 => sys_unlinkat(arg1.into(), TUA::from_value(arg2 as _), arg3 as _).await,
+        0x25 => {
+            sys_linkat(
+                arg1.into(),
+                TUA::from_value(arg2 as _),
+                arg3.into(),
+                TUA::from_value(arg4 as _),
+            )
+            .await
+        }
+        0x26 => {
+            sys_renameat(
+                arg1.into(),
+                TUA::from_value(arg2 as _),
+                arg3.into(),
+                TUA::from_value(arg4 as _),
+            )
+            .await
+        }
         0x2e => sys_ftruncate(arg1.into(), arg2 as _).await,
         0x30 => sys_faccessat(arg1.into(), TUA::from_value(arg2 as _), arg3 as _).await,
         0x31 => sys_chdir(TUA::from_value(arg1 as _)).await,

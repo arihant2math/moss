@@ -417,6 +417,9 @@ where
         let inode: Arc<dyn Inode> = match file_type {
             FileType::File => Arc::new(TmpFsReg::<C, G, T>::new(inode_id)?),
             FileType::Directory => TmpFsDirInode::<C, G, T>::new(new_id, self.fs.clone(), mode),
+            FileType::Symlink => {
+                TmpFsSymlinkInode::<C, G, T>::new(new_id, String::new(), self.fs.clone())
+            }
             _ => return Err(KernelError::NotSupported),
         };
 
@@ -462,6 +465,66 @@ where
             id,
             fs,
             this: weak_this.clone(),
+        })
+    }
+}
+
+/// A symbolic link inode for TmpFs.
+struct TmpFsSymlinkInode<C, G, T>
+where
+    C: CpuOps,
+    G: PageAllocGetter<C>,
+    T: AddressTranslator<()>,
+{
+    target: String,
+    attrs: FileAttr,
+    id: u64,
+    fs: Weak<TmpFs<C, G, T>>,
+}
+
+#[async_trait]
+impl<C, G, T> Inode for TmpFsSymlinkInode<C, G, T>
+where
+    C: CpuOps,
+    G: PageAllocGetter<C>,
+    T: AddressTranslator<()>,
+{
+    fn id(&self) -> InodeId {
+        InodeId::from_fsid_and_inodeid(self.fs.upgrade().unwrap().id(), self.id)
+    }
+
+    async fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<usize> {
+        let data = self.target.as_bytes();
+        if offset as usize >= data.len() {
+            return Ok(0);
+        }
+        let max = core::cmp::min(buf.len(), data.len() - offset as usize);
+        buf[..max].copy_from_slice(&data[offset as usize..offset as usize + max]);
+        Ok(max)
+    }
+
+    async fn getattr(&self) -> Result<FileAttr> {
+        Ok(self.attrs.clone())
+    }
+}
+
+impl<C, G, T> TmpFsSymlinkInode<C, G, T>
+where
+    C: CpuOps,
+    G: PageAllocGetter<C>,
+    T: AddressTranslator<()>,
+{
+    pub fn new(id: u64, target: String, fs: Weak<TmpFs<C, G, T>>) -> Arc<Self> {
+        Arc::new(Self {
+            attrs: FileAttr {
+                size: target.len() as u64,
+                block_size: BLOCK_SZ as _,
+                file_type: FileType::Symlink,
+                ..Default::default()
+            },
+            target,
+            id,
+            fs,
         })
     }
 }
