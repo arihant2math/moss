@@ -74,6 +74,25 @@ const FUTEX_WAIT_BITSET: i32 = 9;
 const FUTEX_WAKE_BITSET: i32 = 10;
 const FUTEX_PRIVATE_FLAG: i32 = 128;
 
+/// Wake up to `nr` waiters sleeping on the futex word located at `uaddr`.
+/// Returns the number of tasks actually woken.
+pub fn futex_wake_addr(uaddr: TUA<u32>, nr: usize) -> usize {
+    let mut woke = 0;
+
+    if let Some(table) = FUTEX_TABLE.get()
+        && let Some(waitq_arc) = table.lock_save_irq().get(&uaddr).cloned()
+    {
+        let mut waitq = waitq_arc.lock_save_irq();
+        for _ in 0..nr {
+            waitq.wakeups = waitq.wakeups.saturating_add(1);
+            waitq.wakers.wake_one();
+            woke += 1;
+        }
+    }
+
+    woke
+}
+
 pub async fn sys_futex(
     uaddr: TUA<u32>,
     op: i32,
@@ -132,21 +151,7 @@ pub async fn sys_futex(
 
         FUTEX_WAKE | FUTEX_WAKE_BITSET => {
             let nr_wake = val as usize;
-            let mut woke = 0;
-
-            if let Some(table) = FUTEX_TABLE.get()
-                && let Some(waitq_arc) = table.lock_save_irq().get(&uaddr).cloned()
-            {
-                let mut waitq = waitq_arc.lock_save_irq();
-                for _ in 0..nr_wake {
-                    // Record a pending wake-up and attempt to wake a single waiter.
-                    waitq.wakeups = waitq.wakeups.saturating_add(1);
-                    waitq.wakers.wake_one();
-                    woke += 1;
-                }
-            }
-
-            Ok(woke)
+            Ok(futex_wake_addr(uaddr, nr_wake))
         }
 
         _ => Err(KernelError::NotSupported),

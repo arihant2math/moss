@@ -1,3 +1,4 @@
+use crate::process::threading::futex_wake_addr;
 use crate::sched::current_task;
 use alloc::vec::Vec;
 use libkernel::error::Result;
@@ -101,6 +102,17 @@ pub fn sys_exit_group(exit_code: usize) -> Result<usize> {
 
 pub fn sys_exit(exit_code: usize) -> Result<usize> {
     let task = current_task();
+
+    // Honour CLONE_CHILD_CLEARTID: clear the user TID word and futex-wake any waiters.
+    if let Some(ptr) = task.child_tid_ptr.lock_save_irq().take() {
+        unsafe {
+            (ptr.value() as *mut u32).write_volatile(0);
+        }
+
+        // Wake any thread waiting on this futex.
+        futex_wake_addr(ptr, 1);
+    }
+
     let process = Arc::clone(&task.process);
     let mut thread_lock = process.threads.lock_save_irq();
 

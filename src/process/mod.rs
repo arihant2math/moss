@@ -181,6 +181,7 @@ pub struct Task {
     pub last_run: SpinLock<Option<Instant>>,
     pub state: Arc<SpinLock<TaskState>>,
     pub robust_list: SpinLock<Option<TUA<RobustListHead>>>,
+    pub child_tid_ptr: SpinLock<Option<TUA<u32>>>,
 }
 
 impl Task {
@@ -214,6 +215,7 @@ impl Task {
             fd_table: Arc::new(SpinLock::new(FileDescriptorTable::new())),
             last_run: SpinLock::new(None),
             robust_list: SpinLock::new(None),
+            child_tid_ptr: SpinLock::new(None),
         }
     }
 
@@ -241,6 +243,7 @@ impl Task {
             )),
             last_run: SpinLock::new(None),
             robust_list: SpinLock::new(None),
+            child_tid_ptr: SpinLock::new(None),
         }
     }
 

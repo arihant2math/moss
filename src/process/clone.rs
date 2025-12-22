@@ -1,3 +1,4 @@
+use crate::memory::uaccess::copy_to_user;
 use crate::{
     process::{TASK_LIST, Task, TaskState},
     sched::{self, current_task},
@@ -44,8 +45,8 @@ bitflags! {
 pub async fn sys_clone(
     flags: u32,
     newsp: UA,
-    _arent_tidptr: UA,
-    _child_tidptr: UA,
+    parent_tidptr: UA,
+    child_tidptr: UA,
     tls: usize,
 ) -> Result<usize> {
     let flags = CloneFlags::from_bits_truncate(flags);
@@ -146,6 +147,11 @@ pub async fn sys_clone(
             state: Arc::new(SpinLock::new(TaskState::Runnable)),
             last_run: SpinLock::new(None),
             robust_list: SpinLock::new(None),
+            child_tid_ptr: SpinLock::new(if !child_tidptr.is_null() {
+                Some(child_tidptr.cast::<u32>())
+            } else {
+                None
+            }),
         }
     };
 
@@ -156,6 +162,14 @@ pub async fn sys_clone(
     let tid = new_task.tid;
 
     sched::insert_task(Arc::new(new_task));
+
+    // Honour CLONE_*SETTID semantics for the parent and (shared-VM) child.
+    if flags.contains(CloneFlags::CLONE_PARENT_SETTID) && !parent_tidptr.is_null() {
+        copy_to_user(parent_tidptr.cast::<u32>(), tid.value() as u32).await?;
+    }
+    if flags.contains(CloneFlags::CLONE_CHILD_SETTID) && !child_tidptr.is_null() {
+        copy_to_user(child_tidptr.cast::<u32>(), tid.value() as u32).await?;
+    }
 
     Ok(tid.value() as _)
 }
