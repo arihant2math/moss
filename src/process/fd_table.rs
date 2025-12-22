@@ -1,7 +1,7 @@
+use crate::net::OpenSocket;
 use crate::{fs::open_file::OpenFile, memory::uaccess::UserCopyable};
 use alloc::{sync::Arc, vec::Vec};
 use libkernel::error::{FsError, Result};
-use crate::net::OpenSocket;
 
 pub mod dup;
 pub mod fcntl;
@@ -43,7 +43,7 @@ bitflags::bitflags! {
 #[derive(Clone)]
 pub enum FileDescriptorEntryInner {
     OpenFile(Arc<OpenFile>),
-    Socket(Arc<OpenSocket>)
+    Socket(Arc<OpenSocket>),
 }
 
 impl From<Arc<OpenFile>> for FileDescriptorEntryInner {
@@ -94,19 +94,17 @@ impl FileDescriptorTable {
 
     /// Gets the file object associated with a given file descriptor, if any.
     pub fn get_file(&self, fd: Fd) -> Option<Arc<OpenFile>> {
-        self.get(fd)
-            .map(|inner| match inner {
-                FileDescriptorEntryInner::OpenFile(file) => Some(file.clone()),
-                _ => None,
-            })?
+        self.get(fd).map(|inner| match inner {
+            FileDescriptorEntryInner::OpenFile(file) => Some(file.clone()),
+            _ => None,
+        })?
     }
 
     pub fn get_socket(&self, fd: Fd) -> Option<Arc<OpenSocket>> {
-        self.get(fd)
-            .map(|inner| match inner {
-                FileDescriptorEntryInner::Socket(socket) => Some(socket.clone()),
-                _ => None,
-            })?
+        self.get(fd).map(|inner| match inner {
+            FileDescriptorEntryInner::Socket(socket) => Some(socket.clone()),
+            _ => None,
+        })?
     }
 
     /// Inserts a new file into the table, returning the new file descriptor.

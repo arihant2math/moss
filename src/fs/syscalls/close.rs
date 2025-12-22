@@ -1,8 +1,8 @@
+use crate::net::{Shutdown, Socket};
+use crate::process::fd_table::FileDescriptorEntryInner;
 use crate::{process::fd_table::Fd, sched::current_task};
 use alloc::sync::Arc;
 use libkernel::error::{KernelError, Result};
-use crate::net::{Shutdown, Socket};
-use crate::process::fd_table::FileDescriptorEntryInner;
 
 pub async fn sys_close(fd: Fd) -> Result<usize> {
     let file = current_task()
@@ -15,7 +15,7 @@ pub async fn sys_close(fd: Fd) -> Result<usize> {
             socket.lock().await.close().await?;
             Ok(0)
         }
-        FileDescriptorEntryInner::OpenFile(file) =>
+        FileDescriptorEntryInner::OpenFile(file) => {
             if let Some(file) = Arc::into_inner(file) {
                 let (ops, ctx) = &mut *file.lock().await;
                 ops.release(ctx).await?;
@@ -24,5 +24,6 @@ pub async fn sys_close(fd: Fd) -> Result<usize> {
             } else {
                 Ok(0)
             }
+        }
     }
 }

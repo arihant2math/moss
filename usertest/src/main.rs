@@ -212,6 +212,20 @@ fn test_rust_thread() {
     println!(" OK");
 }
 
+fn test_tcp_socket() {
+    print!("Testing TCP socket operations ...");
+    use std::net::TcpListener;
+    use std::thread;
+
+    let listener = TcpListener::bind("127.0.0.1:8080").expect("Failed to bind listener");
+    let handle = thread::spawn(move || {
+        // let (mut stream, _) = listener.accept().expect("Failed to accept connection");
+        // let mut buffer = [0; 5];
+        // stream.read_exact(&mut buffer).expect("Failed to read data");
+        // assert_eq!(&buffer, b"Hello");
+    });
+}
+
 fn run_test(test_fn: fn()) {
     // Fork a new process to run the test
     unsafe {
@@ -248,6 +262,7 @@ fn main() {
     run_test(test_rust_file);
     run_test(test_rust_dir);
     run_test(test_rust_thread);
+    run_test(test_tcp_socket);
     let end = std::time::Instant::now();
     println!("All tests passed in {} ms", (end - start).as_millis());
 }

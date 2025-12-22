@@ -38,10 +38,10 @@ mod fs;
 mod interrupts;
 mod kernel;
 mod memory;
+mod net;
 mod process;
 mod sched;
 mod sync;
-mod net;
 
 #[panic_handler]
 fn on_panic(info: &PanicInfo) -> ! {

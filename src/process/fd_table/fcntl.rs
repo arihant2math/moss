@@ -1,8 +1,8 @@
 use bitflags::Flags;
 use libkernel::error::{KernelError, Result};
 
-use crate::{process::fd_table::FdFlags, sched::current_task};
 use super::{Fd, FileDescriptorEntryInner};
+use crate::{process::fd_table::FdFlags, sched::current_task};
 
 const F_DUPFD: u32 = 0; // Duplicate file descriptor.
 const F_GETFD: u32 = 1; // Get file descriptor flags.
