@@ -1,13 +1,13 @@
+use super::{
+    TaskState,
+    thread_group::{ProcessState, Tgid, ThreadGroup, signal::SigId, wait::ChildState},
+};
+use crate::memory::uaccess::copy_to_user;
 use crate::process::threading::futex_wake_addr;
 use crate::sched::current_task;
 use alloc::vec::Vec;
 use libkernel::error::Result;
 use ringbuf::Arc;
-
-use super::{
-    TaskState,
-    thread_group::{ProcessState, Tgid, ThreadGroup, signal::SigId, wait::ChildState},
-};
 
 pub fn do_exit_group(exit_code: ChildState) {
     let task = current_task();
@@ -100,14 +100,13 @@ pub fn sys_exit_group(exit_code: usize) -> Result<usize> {
     Ok(0)
 }
 
-pub fn sys_exit(exit_code: usize) -> Result<usize> {
+pub async fn sys_exit(exit_code: usize) -> Result<usize> {
     let task = current_task();
 
     // Honour CLONE_CHILD_CLEARTID: clear the user TID word and futex-wake any waiters.
-    if let Some(ptr) = task.child_tid_ptr.lock_save_irq().take() {
-        unsafe {
-            (ptr.value() as *mut u32).write_volatile(0);
-        }
+    let ptr = task.child_tid_ptr.lock_save_irq().take();
+    if let Some(ptr) = ptr {
+        copy_to_user(ptr, 0u32).await?;
 
         // Wake any thread waiting on this futex.
         futex_wake_addr(ptr, 1);

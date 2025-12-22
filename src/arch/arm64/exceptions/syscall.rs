@@ -169,7 +169,7 @@ pub async fn handle_syscall() {
         }
         0x50 => sys_fstat(arg1.into(), TUA::from_value(arg2 as _)).await,
         0x51 => sys_sync().await,
-        0x5d => sys_exit(arg1 as _),
+        0x5d => sys_exit(arg1 as _).await,
         0x5e => sys_exit_group(arg1 as _),
         0x60 => sys_set_tid_address(VA::from_value(arg1 as _)).await,
         0x62 => {
@@ -255,8 +255,8 @@ pub async fn handle_syscall() {
             sys_clone(
                 arg1 as _,
                 UA::from_value(arg2 as _),
-                UA::from_value(arg3 as _),
-                UA::from_value(arg5 as _),
+                TUA::from_value(arg3 as _),
+                TUA::from_value(arg5 as _),
                 arg4 as _,
             )
             .await

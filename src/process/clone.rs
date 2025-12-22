@@ -1,3 +1,4 @@
+use super::{ctx::Context, thread_group::signal::SigSet};
 use crate::memory::uaccess::copy_to_user;
 use crate::{
     process::{TASK_LIST, Task, TaskState},
@@ -5,13 +6,12 @@ use crate::{
     sync::SpinLock,
 };
 use bitflags::bitflags;
+use libkernel::memory::address::TUA;
 use libkernel::{
     error::{KernelError, Result},
     memory::address::UA,
 };
 use ringbuf::Arc;
-
-use super::{ctx::Context, thread_group::signal::SigSet};
 
 bitflags! {
     #[derive(Debug)]
@@ -45,8 +45,8 @@ bitflags! {
 pub async fn sys_clone(
     flags: u32,
     newsp: UA,
-    parent_tidptr: UA,
-    child_tidptr: UA,
+    parent_tidptr: TUA<u32>,
+    child_tidptr: TUA<u32>,
     tls: usize,
 ) -> Result<usize> {
     let flags = CloneFlags::from_bits_truncate(flags);
@@ -148,7 +148,7 @@ pub async fn sys_clone(
             last_run: SpinLock::new(None),
             robust_list: SpinLock::new(None),
             child_tid_ptr: SpinLock::new(if !child_tidptr.is_null() {
-                Some(child_tidptr.cast::<u32>())
+                Some(child_tidptr)
             } else {
                 None
             }),
@@ -165,10 +165,10 @@ pub async fn sys_clone(
 
     // Honour CLONE_*SETTID semantics for the parent and (shared-VM) child.
     if flags.contains(CloneFlags::CLONE_PARENT_SETTID) && !parent_tidptr.is_null() {
-        copy_to_user(parent_tidptr.cast::<u32>(), tid.value() as u32).await?;
+        copy_to_user(parent_tidptr, tid.value()).await?;
     }
     if flags.contains(CloneFlags::CLONE_CHILD_SETTID) && !child_tidptr.is_null() {
-        copy_to_user(child_tidptr.cast::<u32>(), tid.value() as u32).await?;
+        copy_to_user(child_tidptr, tid.value()).await?;
     }
 
     Ok(tid.value() as _)
