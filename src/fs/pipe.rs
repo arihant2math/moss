@@ -61,6 +61,10 @@ impl PipeReader {
 #[async_trait]
 impl FileOps for PipeReader {
     async fn read(&mut self, _ctx: &mut FileCtx, u_buf: UA, count: usize) -> Result<usize> {
+        self.readat(u_buf, count, 0).await
+    }
+
+    async fn readat(&mut self, u_buf: UA, count: usize, _offset: u64) -> Result<usize> {
         if count == 0 {
             return Ok(0);
         }
@@ -70,6 +74,10 @@ impl FileOps for PipeReader {
     }
 
     async fn write(&mut self, _ctx: &mut FileCtx, _buf: UA, _count: usize) -> Result<usize> {
+        Err(KernelError::BadFd)
+    }
+
+    async fn writeat(&mut self, _buf: UA, _count: usize, _offset: u64) -> Result<usize> {
         Err(KernelError::BadFd)
     }
 
@@ -135,7 +143,15 @@ impl FileOps for PipeWriter {
         Err(KernelError::BadFd)
     }
 
+    async fn readat(&mut self, _buf: UA, _count: usize, _offset: u64) -> Result<usize> {
+        Err(KernelError::BadFd)
+    }
+
     async fn write(&mut self, _ctx: &mut FileCtx, u_buf: UA, count: usize) -> Result<usize> {
+        self.writeat(u_buf, count, 0).await
+    }
+
+    async fn writeat(&mut self, u_buf: UA, count: usize, _offset: u64) -> Result<usize> {
         if count == 0 {
             return Ok(0);
         }

@@ -31,11 +31,11 @@ impl RegFile {
 impl FileOps for RegFile {
     /// Reads data from the current file position into `buf`. The file's cursor
     /// is advanced by the number of bytes read.
-    async fn read(
+    async fn readat(
         &mut self,
-        ctx: &mut FileCtx,
         mut user_buf: UA,
         mut count: usize,
+        mut offset: u64,
     ) -> Result<usize> {
         let mut pg = ClaimedPage::alloc_zeroed()?;
         let kbuf = pg.as_slice_mut();
@@ -45,7 +45,7 @@ impl FileOps for RegFile {
             let chunk_sz = min(PAGE_SIZE, count);
             copy_from_user_slice(user_buf, &mut kbuf[..chunk_sz]).await?;
 
-            let bytes_read = self.inode.read_at(ctx.pos, &mut kbuf[..chunk_sz]).await?;
+            let bytes_read = self.inode.read_at(offset, &mut kbuf[..chunk_sz]).await?;
 
             if bytes_read == 0 {
                 break;
@@ -53,7 +53,7 @@ impl FileOps for RegFile {
 
             copy_to_user_slice(&kbuf[..bytes_read], user_buf).await?;
 
-            ctx.pos += bytes_read as u64;
+            offset += bytes_read as u64;
             total_bytes_read += bytes_read;
             user_buf = user_buf.add_bytes(bytes_read);
             count -= bytes_read;
@@ -64,7 +64,7 @@ impl FileOps for RegFile {
 
     /// Writes data from `buf` to the current file position.
     /// The file's cursor is advanced by the number of bytes written.
-    async fn write(&mut self, ctx: &mut FileCtx, mut buf: UA, mut count: usize) -> Result<usize> {
+    async fn writeat(&mut self, mut buf: UA, mut count: usize, mut offset: u64) -> Result<usize> {
         let mut pg = ClaimedPage::alloc_zeroed()?;
         let kbuf = pg.as_slice_mut();
         let mut total_bytes_written = 0;
@@ -74,7 +74,7 @@ impl FileOps for RegFile {
 
             copy_from_user_slice(buf, &mut kbuf[..chunk_sz]).await?;
 
-            let bytes_written = self.inode.write_at(ctx.pos, &kbuf[..chunk_sz]).await?;
+            let bytes_written = self.inode.write_at(offset, &kbuf[..chunk_sz]).await?;
 
             // If we wrote 0 bytes, the disk might be full or the file cannot be
             // extended.
@@ -82,7 +82,7 @@ impl FileOps for RegFile {
                 break;
             }
 
-            ctx.pos += bytes_written as u64;
+            offset += bytes_written as u64;
             total_bytes_written += bytes_written;
             count -= bytes_written;
             buf = buf.add_bytes(bytes_written);

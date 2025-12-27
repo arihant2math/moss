@@ -42,14 +42,30 @@ macro_rules! process_iovec {
 pub trait FileOps: Send + Sync {
     /// Reads data from the current file position into `buf`.
     /// The file's cursor is advanced by the number of bytes read.
-    async fn read(&mut self, ctx: &mut FileCtx, buf: UA, count: usize) -> Result<usize>;
+    async fn read(&mut self, ctx: &mut FileCtx, buf: UA, count: usize) -> Result<usize> {
+        let total_bytes_read = self.readat(buf, count, ctx.pos).await?;
+        ctx.pos += total_bytes_read as u64;
+        Ok(total_bytes_read)
+    }
+
+    async fn readat(&mut self, buf: UA, count: usize, offset: u64) -> Result<usize>;
 
     /// Writes data from `buf` to the current file position.
     /// The file's cursor is advanced by the number of bytes written.
-    async fn write(&mut self, ctx: &mut FileCtx, buf: UA, count: usize) -> Result<usize>;
+    async fn write(&mut self, ctx: &mut FileCtx, buf: UA, count: usize) -> Result<usize> {
+        let total_bytes_written = self.writeat(buf, count, ctx.pos).await?;
+        ctx.pos += total_bytes_written as u64;
+        Ok(total_bytes_written)
+    }
+
+    async fn writeat(&mut self, buf: UA, count: usize, offset: u64) -> Result<usize>;
 
     async fn readv(&mut self, ctx: &mut FileCtx, iovecs: &[IoVec]) -> Result<usize> {
         process_iovec!(iovecs, |addr, count| self.read(ctx, addr, count)).await
+    }
+
+    async fn readvat(&mut self, iovecs: &[IoVec], offset: u64) -> Result<usize> {
+        process_iovec!(iovecs, |addr, count| self.readat(addr, count, offset)).await
     }
 
     async fn readdir<'a>(&'a mut self, _ctx: &'a mut FileCtx) -> Result<OpenFileDirIter<'a>> {
@@ -58,6 +74,10 @@ pub trait FileOps: Send + Sync {
 
     async fn writev(&mut self, ctx: &mut FileCtx, iovecs: &[IoVec]) -> Result<usize> {
         process_iovec!(iovecs, |addr, count| self.write(ctx, addr, count)).await
+    }
+
+    async fn writevat(&mut self, iovecs: &[IoVec], offset: u64) -> Result<usize> {
+        process_iovec!(iovecs, |addr, count| self.writeat(addr, count, offset)).await
     }
 
     /// Puts the current task to sleep until a call to `read()` would no longer

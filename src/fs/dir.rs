@@ -62,7 +62,15 @@ impl FileOps for DirFile {
         Err(FsError::IsADirectory.into())
     }
 
+    async fn readat(&mut self, _buf: UA, _count: usize, _offset: u64) -> Result<usize> {
+        Err(FsError::IsADirectory.into())
+    }
+
     async fn write(&mut self, _ctx: &mut FileCtx, _buf: UA, _count: usize) -> Result<usize> {
+        Err(FsError::IsADirectory.into())
+    }
+
+    async fn writeat(&mut self, _buf: UA, _count: usize, _offset: u64) -> Result<usize> {
         Err(FsError::IsADirectory.into())
     }
 

@@ -24,8 +24,8 @@ use crate::{
             chown::sys_fchown,
             close::sys_close,
             ioctl::sys_ioctl,
-            iov::{sys_readv, sys_writev},
-            rw::{sys_read, sys_write},
+            iov::{sys_preadv, sys_preadv2, sys_pwritev, sys_pwritev2, sys_readv, sys_writev},
+            rw::{sys_pread64, sys_pwrite64, sys_read, sys_write},
             seek::sys_lseek,
             splice::sys_sendfile,
             stat::sys_fstat,
@@ -172,6 +172,42 @@ pub async fn handle_syscall() {
         0x40 => sys_write(arg1.into(), TUA::from_value(arg2 as _), arg3 as _).await,
         0x41 => sys_readv(arg1.into(), TUA::from_value(arg2 as _), arg3 as _).await,
         0x42 => sys_writev(arg1.into(), TUA::from_value(arg2 as _), arg3 as _).await,
+        0x43 => {
+            sys_pread64(
+                arg1.into(),
+                TUA::from_value(arg2 as _),
+                arg3 as _,
+                arg4 as _,
+            )
+            .await
+        }
+        0x44 => {
+            sys_pwrite64(
+                arg1.into(),
+                TUA::from_value(arg2 as _),
+                arg3 as _,
+                arg4 as _,
+            )
+            .await
+        }
+        0x45 => {
+            sys_preadv(
+                arg1.into(),
+                TUA::from_value(arg2 as _),
+                arg3 as _,
+                arg4 as _,
+            )
+            .await
+        }
+        0x46 => {
+            sys_pwritev(
+                arg1.into(),
+                TUA::from_value(arg2 as _),
+                arg3 as _,
+                arg4 as _,
+            )
+            .await
+        }
         0x47 => {
             sys_sendfile(
                 arg1.into(),
@@ -364,6 +400,26 @@ pub async fn handle_syscall() {
             .await
         }
         0x116 => sys_getrandom(TUA::from_value(arg1 as _), arg2 as _, arg3 as _).await,
+        0x11e => {
+            sys_preadv2(
+                arg1.into(),
+                TUA::from_value(arg2 as _),
+                arg3 as _,
+                arg4 as _,
+                arg5 as _,
+            )
+            .await
+        }
+        0x11f => {
+            sys_pwritev2(
+                arg1.into(),
+                TUA::from_value(arg2 as _),
+                arg3 as _,
+                arg4 as _,
+                arg5 as _,
+            )
+            .await
+        }
         0x125 => Err(KernelError::NotSupported),
         0x1b7 => {
             sys_faccessat2(

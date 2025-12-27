@@ -84,6 +84,10 @@ impl Tty {
 #[async_trait]
 impl FileOps for Tty {
     async fn read(&mut self, _ctx: &mut FileCtx, usr_buf: UA, count: usize) -> Result<usize> {
+        self.readat(usr_buf, count, 0).await
+    }
+
+    async fn readat(&mut self, usr_buf: UA, count: usize, _offset: u64) -> Result<usize> {
         let (cooked_pipe, eof_fut) = {
             let cooker = self.input_cooker.lock_save_irq();
 
@@ -129,7 +133,11 @@ impl FileOps for Tty {
         })
     }
 
-    async fn write(&mut self, _ctx: &mut FileCtx, mut ptr: UA, count: usize) -> Result<usize> {
+    async fn write(&mut self, _ctx: &mut FileCtx, ptr: UA, count: usize) -> Result<usize> {
+        self.writeat(ptr, count, 0).await
+    }
+
+    async fn writeat(&mut self, mut ptr: UA, count: usize, _offset: u64) -> Result<usize> {
         const CHUNK_SZ: usize = 128;
 
         let mut remaining = count;

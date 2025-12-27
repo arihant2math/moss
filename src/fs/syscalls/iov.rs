@@ -45,3 +45,51 @@ pub async fn sys_readv(fd: Fd, iov_ptr: TUA<IoVec>, no_iov: usize) -> Result<usi
 
     ops.readv(state, &iovs).await
 }
+
+pub async fn sys_pwritev(fd: Fd, iov_ptr: TUA<IoVec>, no_iov: usize, offset: u64) -> Result<usize> {
+    sys_pwritev2(fd, iov_ptr, no_iov, offset, 0).await
+}
+
+pub async fn sys_preadv(fd: Fd, iov_ptr: TUA<IoVec>, no_iov: usize, offset: u64) -> Result<usize> {
+    sys_preadv2(fd, iov_ptr, no_iov, offset, 0).await
+}
+
+pub async fn sys_pwritev2(
+    fd: Fd,
+    iov_ptr: TUA<IoVec>,
+    no_iov: usize,
+    offset: u64,
+    _flags: u32, // TODO: implement these flags
+) -> Result<usize> {
+    let file = current_task()
+        .fd_table
+        .lock_save_irq()
+        .get(fd)
+        .ok_or(KernelError::BadFd)?;
+
+    let iovs = copy_obj_array_from_user(iov_ptr, no_iov).await?;
+
+    let (ops, _state) = &mut *file.lock().await;
+
+    ops.writevat(&iovs, offset).await
+}
+
+pub async fn sys_preadv2(
+    fd: Fd,
+    iov_ptr: TUA<IoVec>,
+    no_iov: usize,
+    offset: u64,
+    _flags: u32,
+) -> Result<usize> {
+    let file = current_task()
+        .fd_table
+        .lock_save_irq()
+        .get(fd)
+        .ok_or(KernelError::BadFd)?;
+
+    let iovs = copy_obj_array_from_user(iov_ptr, no_iov).await?;
+
+    let (ops, _state) = &mut *file.lock().await;
+
+    ops.readvat(&iovs, offset).await
+}

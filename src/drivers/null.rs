@@ -3,7 +3,7 @@ use crate::{
         CharDriver, DriverManager, OpenableDevice, ReservedMajors, fs::dev::devfs,
         init::PlatformBus,
     },
-    fs::{fops::FileOps, open_file::FileCtx, open_file::OpenFile},
+    fs::{fops::FileOps, open_file::OpenFile},
     kernel_driver,
 };
 use alloc::string::ToString;
@@ -22,12 +22,12 @@ struct NullFileOps;
 
 #[async_trait]
 impl FileOps for NullFileOps {
-    async fn read(&mut self, _ctx: &mut FileCtx, _buf: UA, _count: usize) -> Result<usize> {
+    async fn readat(&mut self, _buf: UA, _count: usize, _offset: u64) -> Result<usize> {
         // EOF
         Ok(0)
     }
 
-    async fn write(&mut self, _ctx: &mut FileCtx, _buf: UA, count: usize) -> Result<usize> {
+    async fn writeat(&mut self, _buf: UA, count: usize, _offset: u64) -> Result<usize> {
         // Pretend we wrote everything successfully.
         Ok(count)
     }

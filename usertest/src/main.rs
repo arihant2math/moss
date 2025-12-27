@@ -482,13 +482,17 @@ fn test_ftruncate() {
     let mut buffer = [1u8; 5];
     unsafe {
         let fd = libc::open(c_file.as_ptr(), libc::O_RDWR | libc::O_CREAT, 0o777);
-        let ret = libc::write(fd, data.as_ptr() as *const libc::c_void, data.len());
+        let ret = libc::pwrite64(fd, data.as_ptr() as *const libc::c_void, data.len(), 0);
         if ret < 0 || ret as usize != data.len() {
             panic!("write failed");
         }
         libc::ftruncate(fd, 5);
-        libc::lseek(fd, 0, libc::SEEK_SET);
-        let ret = libc::read(fd, buffer.as_mut_ptr() as *mut libc::c_void, buffer.len());
+        let ret = libc::pread64(
+            fd,
+            buffer.as_mut_ptr() as *mut libc::c_void,
+            buffer.len(),
+            0,
+        );
         if ret < 0 || ret as usize != 5 {
             panic!("read failed");
         }

@@ -25,7 +25,11 @@ struct ZeroFileOps;
 
 #[async_trait]
 impl FileOps for ZeroFileOps {
-    async fn read(&mut self, _ctx: &mut FileCtx, mut buf: UA, mut count: usize) -> Result<usize> {
+    async fn read(&mut self, _ctx: &mut FileCtx, buf: UA, count: usize) -> Result<usize> {
+        self.readat(buf, count, 0).await
+    }
+
+    async fn readat(&mut self, mut buf: UA, mut count: usize, _offset: u64) -> Result<usize> {
         let requested = count;
 
         while count > 0 {
@@ -39,7 +43,11 @@ impl FileOps for ZeroFileOps {
         Ok(requested)
     }
 
-    async fn write(&mut self, _ctx: &mut FileCtx, _buf: UA, count: usize) -> Result<usize> {
+    async fn write(&mut self, _ctx: &mut FileCtx, buf: UA, count: usize) -> Result<usize> {
+        self.writeat(buf, count, 0).await
+    }
+
+    async fn writeat(&mut self, _buf: UA, count: usize, _offset: u64) -> Result<usize> {
         Ok(count)
     }
 
