@@ -122,10 +122,6 @@ fn schedule() {
     //         );
     //     }
     // }
-    if previous_task.tid == next_task.tid {
-        // No context switch needed.
-        return;
-    }
 
     sched_state
         .switch_to_task(Some(previous_task), next_task.clone())
@@ -330,12 +326,12 @@ impl SchedState {
                 *deadline_guard = Some(now_inst + Duration::from_millis(DEFAULT_TIME_SLICE_MS));
             }
             if let Some(d) = *deadline_guard {
-                // log::debug!(
-                //     "CPU {}: Next task {} has deadline in {}ms",
-                //     CpuId::this().value(),
-                //     next_task.tid.value(),
-                //     (d - now_inst).as_millis()
-                // );
+                log::debug!(
+                    "CPU {}: Next task {} has deadline in {}ms",
+                    CpuId::this().value(),
+                    next_task.tid.value(),
+                    (d - now_inst).as_millis()
+                );
                 schedule_preempt(d);
             }
         }
