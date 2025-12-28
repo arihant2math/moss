@@ -151,7 +151,11 @@ pub fn insert_task(task: Arc<Task>) {
 
 pub fn insert_task_cross_cpu(task: Arc<Task>) {
     let cpu = get_next_cpu();
-    message_cpu(cpu.value(), Message::PutTask(task)).expect("Failed to send task to CPU");
+    if cpu == CpuId::this() {
+        insert_task(task);
+    } else {
+        message_cpu(cpu.value(), Message::PutTask(task)).expect("Failed to send task to CPU");
+    }
 }
 
 pub struct SchedState {
