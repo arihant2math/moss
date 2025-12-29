@@ -1,5 +1,6 @@
 use crate::drivers::timer::Instant;
 use crate::process::threading::RobustListHead;
+use crate::sched::CpuId;
 use crate::{
     arch::{Arch, ArchImpl},
     fs::DummyInode,
@@ -14,7 +15,7 @@ use creds::Credentials;
 use ctx::{Context, UserCtx};
 use fd_table::FileDescriptorTable;
 use libkernel::memory::address::TUA;
-use libkernel::{CpuOps, VirtualMemory, fs::Inode};
+use libkernel::{VirtualMemory, fs::Inode};
 use libkernel::{
     fs::pathbuf::PathBuf,
     memory::{
@@ -193,7 +194,7 @@ pub struct Task {
     pub state: Arc<SpinLock<TaskState>>,
     pub robust_list: SpinLock<Option<TUA<RobustListHead>>>,
     pub child_tid_ptr: SpinLock<Option<TUA<u32>>>,
-    pub last_cpu: SpinLock<usize>,
+    pub last_cpu: SpinLock<CpuId>,
 }
 
 impl Task {
@@ -230,7 +231,7 @@ impl Task {
             last_run: SpinLock::new(None),
             robust_list: SpinLock::new(None),
             child_tid_ptr: SpinLock::new(None),
-            last_cpu: SpinLock::new(ArchImpl::id()),
+            last_cpu: SpinLock::new(CpuId::this()),
         }
     }
 
@@ -261,7 +262,7 @@ impl Task {
             last_run: SpinLock::new(None),
             robust_list: SpinLock::new(None),
             child_tid_ptr: SpinLock::new(None),
-            last_cpu: SpinLock::new(ArchImpl::id()),
+            last_cpu: SpinLock::new(CpuId::this()),
         }
     }
 

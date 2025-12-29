@@ -323,7 +323,7 @@ impl SchedState {
         }
 
         *next_task.exec_start.lock_save_irq() = Some(now_inst);
-        *next_task.last_cpu.lock_save_irq() = CpuId::this().value();
+        *next_task.last_cpu.lock_save_irq() = CpuId::this();
 
         // Make sure the task possesses an eligible virtual deadline. If none is set
         // (or the previous one has elapsed), we hand out a brand-new one.
