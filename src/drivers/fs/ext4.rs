@@ -6,6 +6,7 @@ use libkernel::{
     fs::{BlockDevice, Filesystem, blk::buffer::BlockBuffer, filesystems::ext4::Ext4Filesystem},
 };
 use log::warn;
+use crate::arch::ArchImpl;
 
 pub struct Ext4FsDriver {}
 
@@ -33,7 +34,7 @@ impl FilesystemDriver for Ext4FsDriver {
         device: Option<Box<dyn BlockDevice>>,
     ) -> Result<Arc<dyn Filesystem>> {
         match device {
-            Some(dev) => Ok(Ext4Filesystem::new(BlockBuffer::new(dev), fs_id).await?),
+            Some(dev) => Ok(Ext4Filesystem::<ArchImpl>::new(BlockBuffer::new(dev), fs_id).await?),
             None => {
                 warn!("Could not mount fat32 fs with no block device");
                 Err(KernelError::InvalidValue)
