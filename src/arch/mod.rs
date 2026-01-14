@@ -16,6 +16,7 @@ use crate::{
         thread_group::signal::{SigId, ksigaction::UserspaceSigAction},
     },
 };
+use alloc::string::String;
 use alloc::sync::Arc;
 use libkernel::{
     CpuOps, VirtualMemory,
@@ -192,6 +193,8 @@ pub trait Arch: CpuOps + VirtualMemory {
         dst: *mut u8,
         len: usize,
     ) -> impl Future<Output = Result<usize>>;
+
+    fn get_cmdline() -> Option<String>;
 }
 
 #[cfg(target_arch = "aarch64")]

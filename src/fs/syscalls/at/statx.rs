@@ -199,6 +199,11 @@ pub async fn sys_statx(
         stat_x.stx_btime = attr.btime.into();
     }
 
+    if mask.contains(StatXMask::STATX_MNT_ID) {
+        stat_x.stx_mask |= StatXMask::STATX_MNT_ID.bits();
+        stat_x.stx_mnt_id = attr.id.fs_id();
+    }
+
     stat_x.stx_attributes_mask = StatXAttr::STATX_ATTR_MOUNT_ROOT.bits();
     if VFS.is_mount_root(attr.id) {
         stat_x.stx_attributes |= StatXAttr::STATX_ATTR_MOUNT_ROOT.bits();
