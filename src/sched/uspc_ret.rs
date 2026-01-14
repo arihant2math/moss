@@ -136,7 +136,15 @@ pub fn dispatch_userspace_task(ctx: *mut UserCtx) {
                                 // the waker will have put us into this state.
                                 // Transition back to `Running` since we're
                                 // ready to progress with more work.
-                                TaskState::Woken => *task_state = TaskState::Running,
+                                TaskState::Woken => {
+                                    *task_state = TaskState::Running;
+                                }
+                                // If the task finished concurrently while we were
+                                // polling its signal work, let the scheduler
+                                // pick another task; no further work to do here.
+                                TaskState::Finished => {
+                                    force_resched();
+                                }
                                 // We should never get here for any other state.
                                 s => {
                                     unreachable!(
@@ -207,7 +215,15 @@ pub fn dispatch_userspace_task(ctx: *mut UserCtx) {
                                 // the waker will have put us into this state.
                                 // Transition back to `Running` since we're
                                 // ready to progress with more work.
-                                TaskState::Woken => *task_state = TaskState::Running,
+                                TaskState::Woken => {
+                                    *task_state = TaskState::Running;
+                                }
+                                // Task finished concurrently while we were trying
+                                // to put it to sleep; just reschedule and let
+                                // teardown handle it.
+                                TaskState::Finished => {
+                                    force_resched();
+                                }
                                 // We should never get here for any other state.
                                 s => {
                                     unreachable!(
