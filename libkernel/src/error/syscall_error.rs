@@ -57,6 +57,7 @@ pub fn kern_err_to_syscall(err: KernelError) -> isize {
         KernelError::RangeError => ERANGE,
         KernelError::NoChildProcess => ECHILD,
         KernelError::OpNotSupported => EOPNOTSUPP,
+        KernelError::Fs(FsError::AlreadyExists) => EEXIST,
         e => todo!("{e}"),
     }
 }

@@ -2,6 +2,7 @@ use aarch64_cpu::{
     asm::wfi,
     registers::{DAIF, MPIDR_EL1, ReadWriteable, Readable},
 };
+use alloc::string::String;
 use alloc::sync::Arc;
 use cpu_ops::{local_irq_restore, local_irq_save};
 use exceptions::ExceptionState;
@@ -80,6 +81,10 @@ impl VirtualMemory for Aarch64 {
 impl Arch for Aarch64 {
     type UserContext = ExceptionState;
     type PTraceGpRegs = Arm64PtraceGPRegs;
+
+    fn get_cmdline() -> Option<String> {
+        fdt::get_cmdline()
+    }
 
     fn new_user_context(entry_point: VA, stack_top: VA) -> Self::UserContext {
         ExceptionState {

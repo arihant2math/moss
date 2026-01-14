@@ -1,5 +1,6 @@
 #![allow(clippy::module_name_repetitions)]
 
+use crate::arch::{Arch, ArchImpl};
 use crate::process::find_task_by_descriptor;
 use crate::process::thread_group::Tgid;
 use crate::sched::current::current_task;
@@ -100,6 +101,10 @@ impl Inode for ProcRootInode {
         let pid = if name == "self" {
             let current_task = current_task();
             current_task.descriptor().tgid()
+        } else if name == "cmdline" {
+            let fs = procfs();
+            let inode_id = fs.alloc_inode_id();
+            return Ok(Arc::new(CmdlineInode::new(inode_id)));
         } else {
             Tgid(
                 name.parse()
@@ -113,9 +118,7 @@ impl Inode for ProcRootInode {
             return Err(FsError::NotFound.into());
         }
 
-        let fs = procfs();
-
-        let inode_id = fs.alloc_inode_id();
+        let inode_id = InodeId::from_fsid_and_inodeid(PROCFS_ID, pid.0 as u64 * 100);
         Ok(Arc::new(ProcTaskInode::new(pid, inode_id)))
     }
 
@@ -433,6 +436,55 @@ Threads:\t{tasks}\n",
             };
         }
         Err(KernelError::NotSupported)
+    }
+}
+
+struct CmdlineInode {
+    id: InodeId,
+    attr: FileAttr,
+}
+
+impl CmdlineInode {
+    fn new(inode_id: InodeId) -> Self {
+        Self {
+            id: inode_id,
+            attr: FileAttr {
+                file_type: FileType::File,
+                mode: FilePermissions::from_bits_retain(0o444),
+                ..FileAttr::default()
+            },
+        }
+    }
+}
+
+#[async_trait]
+impl Inode for CmdlineInode {
+    fn id(&self) -> InodeId {
+        self.id
+    }
+
+    async fn lookup(&self, _name: &str) -> Result<Arc<dyn Inode>> {
+        Err(FsError::NotADirectory.into())
+    }
+
+    async fn getattr(&self) -> Result<FileAttr> {
+        Ok(self.attr.clone())
+    }
+
+    async fn readdir(&self, _start_offset: u64) -> Result<Box<dyn DirStream>> {
+        Err(FsError::NotADirectory.into())
+    }
+
+    async fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<usize> {
+        let cmdline = ArchImpl::get_cmdline().unwrap_or_default();
+        let bytes = cmdline.as_bytes();
+        let end = usize::min(bytes.len().saturating_sub(offset as usize), buf.len());
+        if end == 0 {
+            return Ok(0);
+        }
+        let slice = &bytes[offset as usize..offset as usize + end];
+        buf[..end].copy_from_slice(slice);
+        Ok(end)
     }
 }
 
