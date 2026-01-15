@@ -62,7 +62,12 @@ impl ThreadGroupBuilder {
     pub fn build(self) -> Arc<ThreadGroup> {
         let ret = Arc::new(ThreadGroup {
             tgid: self.tgid,
-            pgid: SpinLock::new(Pgid(self.tgid.value())),
+            pgid: SpinLock::new(
+                self.parent
+                    .as_ref()
+                    .map(|x| *x.pgid.lock_save_irq())
+                    .unwrap_or_else(|| Pgid(self.tgid.value())),
+            ),
             sid: SpinLock::new(Sid(self.tgid.value())),
             parent: SpinLock::new(self.parent.as_ref().map(Arc::downgrade)),
             umask: SpinLock::new(self.umask.unwrap_or(0)),
