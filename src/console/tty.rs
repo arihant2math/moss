@@ -2,7 +2,10 @@ use crate::{
     fs::{fops::FileOps, open_file::FileCtx},
     kernel::kpipe::KPipe,
     memory::uaccess::{copy_from_user, copy_from_user_slice, copy_to_user},
-    process::thread_group::Pgid,
+    process::thread_group::{
+        Pgid,
+        signal::{InterruptResult, Interruptable},
+    },
     sched::current::current_task,
     sync::SpinLock,
 };
@@ -108,9 +111,10 @@ impl FileOps for Tty {
 
         pin_mut!(copy_fut);
 
-        match select(copy_fut, eof_fut).await {
-            Either::Left((result, _)) => result,
-            Either::Right(_) => Ok(0),
+        match select(copy_fut, eof_fut).interruptable().await {
+            InterruptResult::Interrupted => Err(KernelError::Interrupted),
+            InterruptResult::Uninterrupted(Either::Left((result, _))) => result,
+            InterruptResult::Uninterrupted(Either::Right(_)) => Ok(0),
         }
     }
 
@@ -127,7 +131,7 @@ impl FileOps for Tty {
         };
 
         Box::pin(async move {
-            select(read_ready_fut, eof_fut).await;
+            select(read_ready_fut, eof_fut).interruptable().await;
 
             Ok(())
         })
