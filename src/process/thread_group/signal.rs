@@ -5,7 +5,7 @@ use core::{
     fmt::Display,
     mem::transmute,
     ops::{Index, IndexMut},
-    task::{Poll, ready},
+    task::Poll,
 };
 use ksigaction::{KSignalAction, UserspaceSigAction};
 use libkernel::memory::{address::UA, region::UserMemoryRegion};
@@ -294,13 +294,22 @@ impl<T, F: Future<Output = T>> Future for InterruptableFut<T, F> {
         self: core::pin::Pin<&mut Self>,
         cx: &mut core::task::Context<'_>,
     ) -> Poll<Self::Output> {
+        // Try the underlying future first.
+        let res = unsafe {
+            self.map_unchecked_mut(|f| &mut f.sub_fut)
+                .poll(cx)
+                .map(|x| InterruptResult::Uninterrupted(x))
+        };
+
+        if res.is_ready() {
+            return res;
+        }
+
+        // See if there's a pending signal which interrupts this future.
         if current_task().peek_signal().is_some() {
             Poll::Ready(InterruptResult::Interrupted)
         } else {
-            unsafe {
-                let val = ready!(self.map_unchecked_mut(|f| &mut f.sub_fut).poll(cx));
-                Poll::Ready(InterruptResult::Uninterrupted(val))
-            }
+            Poll::Pending
         }
     }
 }
