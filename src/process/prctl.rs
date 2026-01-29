@@ -91,7 +91,19 @@ async fn pr_cap_ambient(op: u64, arg1: u64) -> Result<usize> {
             creds.caps.ambient_mut().remove(what);
             Ok(0)
         }
-        op => todo!("prctl PR_CAP_AMBIENT op: {:?}", op),
+        AmbientCapOp::Raise => {
+            let what =
+                CapabilitiesFlags::from_bits(1u64 << arg1).ok_or(KernelError::InvalidValue)?;
+            let mut creds = task.creds.lock_save_irq();
+            if !creds.caps.inheritable().contains(what) {
+                return Err(KernelError::NotPermitted);
+            }
+            if !creds.caps.bounding().contains(what) {
+                return Err(KernelError::NotPermitted);
+            }
+            creds.caps.ambient_mut().insert(what);
+            Ok(0)
+        }
     }
 }
 
