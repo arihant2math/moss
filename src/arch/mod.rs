@@ -55,6 +55,8 @@ pub trait Arch: CpuOps + VirtualMemory {
     /// Restarts the machine. Implementations must never return.
     fn restart() -> !;
 
+    fn get_cmdline() -> Option<String>;
+
     /// Call a user-specified signal handler in the current process.
     fn do_signal(
         sig: SigId,

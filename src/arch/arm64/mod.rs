@@ -145,6 +145,10 @@ impl Arch for Aarch64 {
         Self::halt()
     }
 
+    fn get_cmdline() -> Option<String> {
+        fdt::get_cmdline()
+    }
+
     unsafe fn copy_from_user(
         src: UA,
         dst: *mut (),
