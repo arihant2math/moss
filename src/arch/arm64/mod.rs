@@ -82,10 +82,6 @@ impl Arch for Aarch64 {
     type UserContext = ExceptionState;
     type PTraceGpRegs = Arm64PtraceGPRegs;
 
-    fn get_cmdline() -> Option<String> {
-        fdt::get_cmdline()
-    }
-
     fn new_user_context(entry_point: VA, stack_top: VA) -> Self::UserContext {
         ExceptionState {
             x: [0; 31],
