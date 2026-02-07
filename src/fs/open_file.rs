@@ -53,6 +53,10 @@ impl OpenFile {
         self.state.lock().await.1.flags
     }
 
+    pub async fn set_flags(&self, flags: OpenFlags) {
+        self.state.lock().await.1.flags = flags;
+    }
+
     pub async fn lock(&self) -> AsyncMutexGuard<'_, (Box<dyn FileOps>, FileCtx)> {
         self.state.lock().await
     }
