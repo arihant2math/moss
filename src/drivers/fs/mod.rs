@@ -1,4 +1,5 @@
 use alloc::sync::Arc;
+use cgroup::CgroupFsDriver;
 use dev::DevFsDriver;
 use ext4::Ext4FsDriver;
 use fat32::Fat32FsDriver;
@@ -8,6 +9,7 @@ use tmpfs::TmpFsDriver;
 
 use super::DM;
 
+pub mod cgroup;
 pub mod dev;
 pub mod ext4;
 pub mod fat32;
@@ -24,4 +26,5 @@ pub fn register_fs_drivers() {
     dm.insert_driver(Arc::new(ProcFsDriver::new()));
     dm.insert_driver(Arc::new(SysFsDriver::new()));
     dm.insert_driver(Arc::new(TmpFsDriver::new()));
+    dm.insert_driver(Arc::new(CgroupFsDriver::new()));
 }

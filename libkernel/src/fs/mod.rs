@@ -52,6 +52,7 @@ bitflags::bitflags! {
 pub const DEVFS_ID: u64 = 1;
 pub const PROCFS_ID: u64 = 2;
 pub const SYSFS_ID: u64 = 3;
+pub const CGROUPFS_ID: u64 = 4;
 pub const FS_ID_START: u64 = 10;
 
 /// Trait for a mounted filesystem instance. Its main role is to act as a
