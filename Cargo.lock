@@ -142,7 +142,7 @@ dependencies = [
 [[package]]
 name = "ext4-view"
 version = "0.9.3"
-source = "git+https://github.com/arihant2math/ext4-view-rs.git?branch=main#cb9a222d37f7b90d3b92068cad8d86d042171471"
+source = "git+https://github.com/arihant2math/ext4-view-rs.git?branch=main#73c3f2f03fd3d3e3336107d1a707f7842008da3f"
 dependencies = [
  "async-trait",
  "bitflags",
@@ -407,6 +407,7 @@ dependencies = [
  "rand",
  "ringbuf",
  "rustc-hash",
+ "simple-module",
  "time",
  "tock-registers",
 ]
@@ -467,9 +468,9 @@ checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
 name = "pin-project-lite"
-version = "0.2.16"
+version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b3cff922bd51709b605d9ead9aa71031d81447142d828eb4a6eba76fe619f9b"
+checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "portable-atomic"
@@ -652,6 +653,10 @@ dependencies = [
  "errno",
  "libc",
 ]
+
+[[package]]
+name = "simple-module"
+version = "0.1.0"
 
 [[package]]
 name = "slab"

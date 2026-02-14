@@ -1,5 +1,5 @@
 [workspace]
-members = ["libkernel", "moss-macros", "usertest"]
+members = ["libkernel", "modules/simple-module", "moss-macros", "usertest"]
 
 [workspace.dependencies]
 async-trait = "0.1.89"
@@ -39,6 +39,7 @@ paste = { workspace = true }
 ringbuf = { version = "0.4.8", default-features = false, features = ["alloc"] }
 rand = { workspace = true }
 rustc-hash = { version = "2.1", default-features = false }
+simple-module = { path = "modules/simple-module" }
 tock-registers = "0.10.1"
 
 [build-dependencies]

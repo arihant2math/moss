@@ -40,6 +40,9 @@ use sched::{
 extern crate alloc;
 extern crate moss_macros;
 
+// Ensure statically-linked modules are pulled in so their initcall sections end up in the final ELF.
+extern crate simple_module;
+
 mod arch;
 mod clock;
 mod console;
@@ -48,6 +51,7 @@ mod fs;
 mod interrupts;
 mod kernel;
 mod memory;
+mod module;
 mod process;
 mod sched;
 mod sync;
@@ -81,6 +85,7 @@ async fn launch_init(mut opts: KOptions) {
         .unwrap_or_else(|| panic!("No init specified in kernel command line"));
 
     let dt = get_fdt();
+    module::do_initcalls();
 
     let initrd_block_dev: Option<Box<dyn BlockDevice>> = if let Some(chosen) =
         dt.find_nodes("/chosen").next()

@@ -25,9 +25,24 @@ SECTIONS
     .data : { *(.data*) }
     .rodata : {
         *(.rodata*)
+
+        __initcall_start = .;
+
+        __initcall0_start = .; KEEP(*(.initcall0)) KEEP(*(.initcall0.*)) KEEP(*(.initcall0s.*)) __initcall0_end = .;
+        __initcall1_start = .; KEEP(*(.initcall1)) KEEP(*(.initcall1.*)) KEEP(*(.initcall1s.*)) __initcall1_end = .;
+        __initcall2_start = .; KEEP(*(.initcall2)) KEEP(*(.initcall2.*)) KEEP(*(.initcall2s.*)) __initcall2_end = .;
+        __initcall3_start = .; KEEP(*(.initcall3)) KEEP(*(.initcall3.*)) KEEP(*(.initcall3s.*)) __initcall3_end = .;
+        __initcall4_start = .; KEEP(*(.initcall4)) KEEP(*(.initcall4.*)) KEEP(*(.initcall4s.*)) __initcall4_end = .;
+        __initcall5_start = .; KEEP(*(.initcall5)) KEEP(*(.initcall5.*)) KEEP(*(.initcall5s.*)) __initcall5_end = .;
+        __initcall6_start = .; KEEP(*(.initcall6)) KEEP(*(.initcall6.*)) KEEP(*(.initcall6s.*)) __initcall6_end = .;
+        __initcall7_start = .; KEEP(*(.initcall7)) KEEP(*(.initcall7.*)) KEEP(*(.initcall7s.*)) __initcall7_end = .;
+
+        __initcall_end = .;
+
         __driver_inits_start = .;
         *(.driver_inits*)
         __driver_inits_end = .;
+
         __fixups_start = .;
         *(.exception_fixups*)
         __fixups_end = .;
