@@ -2,13 +2,18 @@
 
 #![feature(used_with_arg)]
 
+use core::ffi::c_char;
+
 unsafe extern "C" {
-    fn moss_test(i: i32) -> i32;
+    fn printk(format: *const c_char, ...);
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn init_simple_module() -> i32 {
-    unsafe { moss_test(42) }
+    unsafe {
+        printk(c"Hello from simple rust module!".as_ptr());
+    }
+    0
 }
 
 #[unsafe(link_section = ".initcall6")]

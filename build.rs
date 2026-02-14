@@ -1,9 +1,28 @@
-use std::path::PathBuf;
+use std::env;
+use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
 use time::macros::format_description;
 
+fn build_modules(linker_script: &Path) {
+    println!("cargo::rerun-if-changed=modules/");
+    let linker_opt = format!("-Wl,-T,{}", linker_script.display());
+    cc::Build::new()
+        .compiler(Path::new("aarch64-none-elf-gcc"))
+        .file("./modules/simple-c-module/simple-module.c")
+        .flags(&["-Imodules/include/", &linker_opt])
+        .warnings(false)
+        .compile("simple-c-module");
+
+    let out = PathBuf::from(env::var("OUT_DIR").unwrap());
+    println!("cargo:rustc-link-search=native={}", out.display());
+    println!("cargo:rustc-link-arg=--whole-archive");
+    println!("cargo:rustc-link-lib=static=simple-c-module");
+    println!("cargo:rustc-link-arg=--no-whole-archive");
+}
+
+
 fn main() {
-    let linker_script = match std::env::var("CARGO_CFG_TARGET_ARCH") {
+    let linker_script = match env::var("CARGO_CFG_TARGET_ARCH") {
         Ok(arch) if arch == "aarch64" => PathBuf::from("./src/arch/arm64/boot/linker.ld"),
         Ok(arch) => {
             println!("Unsupported arch: {arch}");
@@ -14,6 +33,9 @@ fn main() {
 
     println!("cargo::rerun-if-changed={}", linker_script.display());
     println!("cargo::rustc-link-arg=-T{}", linker_script.display());
+
+    // Build modules
+    build_modules(&linker_script);
 
     // Set an environment variable with the date and time of the build
     let now = OffsetDateTime::now_utc();

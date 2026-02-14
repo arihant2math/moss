@@ -43,6 +43,7 @@ simple-module = { path = "modules/simple-module" }
 tock-registers = "0.10.1"
 
 [build-dependencies]
+cc = "1.2"
 time = { version = "0.3.47", features = ["formatting", "macros"] } # For build timestamping via build.rs
 
 [features]

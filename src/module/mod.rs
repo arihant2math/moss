@@ -1,3 +1,4 @@
+use core::ffi::c_char;
 use log::error;
 use paste::paste;
 
@@ -71,7 +72,27 @@ pub fn do_initcalls() {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn moss_test(i: i32) -> i32 {
-    log::info!("Hello from moss_test! Got argument: {}", i);
-    0
+pub unsafe extern "C" fn printk(format: *const c_char, _args: ...) {
+    // TODO: handle args
+    let format_str = unsafe { core::ffi::CStr::from_ptr(format) };
+    let log_level = if format_str.to_bytes()[0] == b'\x01' {
+        Some(match format_str.to_bytes()[1] {
+            0 => log::Level::Error,
+            1 => log::Level::Warn,
+            2 => log::Level::Info,
+            3 => log::Level::Debug,
+            4 => log::Level::Trace,
+            _ => {
+                error!("Invalid log level in printk format string: {}", format_str.to_string_lossy());
+                log::Level::Info
+            }
+        })
+    } else {
+        None
+    };
+    log::log!(
+        log_level.unwrap_or(log::Level::Info),
+        "{}",
+        format_str.to_string_lossy()
+    );
 }
