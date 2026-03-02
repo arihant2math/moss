@@ -3,6 +3,7 @@ use super::meta::VSUSP;
 use super::{TtyInputHandler, meta::*};
 use crate::console::Console;
 use crate::kernel::kpipe::KPipe;
+use crate::kernel::rand::entropy_pool;
 use crate::process::thread_group::Pgid;
 use crate::process::thread_group::signal::SigId;
 use crate::process::thread_group::signal::kill::send_signal_to_pg;
@@ -51,6 +52,11 @@ impl TtyInputHandler for SpinLock<TtyInputCooker> {
             console,
             ..
         } = &mut *this;
+
+        // Seed the entropy pool.
+        //
+        // SAFETY: A console interrupt isn't periodic.
+        entropy_pool().add_temporal_entropy();
 
         // Handle signal-generating control characters
         if termios.c_lflag.contains(TermiosLocalFlags::ISIG) {
