@@ -1,7 +1,7 @@
 use crate::fs::open_file::FileCtx;
 use crate::kernel::kpipe::KPipe;
-use crate::socket::sops::{RecvFlags, SendFlags};
-use crate::socket::{SockAddr, SocketOps};
+use crate::net::sops::{RecvFlags, SendFlags};
+use crate::net::{SockAddr, SocketOps};
 use crate::sync::OnceLock;
 use crate::sync::SpinLock;
 use alloc::boxed::Box;
@@ -44,7 +44,7 @@ pub struct UnixSocket {
     inbox: Arc<KPipe>,
     /// The peer endpoint's inbox
     peer_inbox: SpinLock<Option<Arc<KPipe>>>,
-    local_addr: SpinLock<Option<crate::socket::SockAddrUn>>,
+    local_addr: SpinLock<Option<crate::net::SockAddrUn>>,
     connected: SpinLock<bool>,
     listening: SpinLock<bool>,
     backlog: SpinLock<usize>,
@@ -78,7 +78,7 @@ impl UnixSocket {
         Self::new(SocketType::SeqPacket)
     }
 
-    fn path_bytes(saun: &crate::socket::SockAddrUn) -> Option<Vec<u8>> {
+    fn path_bytes(saun: &crate::net::SockAddrUn) -> Option<Vec<u8>> {
         // Unix path is a sun_path-like fixed-size buffer which may be null-terminated
         let mut end = saun.path.len();
         for (i, b) in saun.path.iter().enumerate() {
@@ -113,7 +113,7 @@ impl SocketOps for UnixSocket {
                     Endpoint {
                         inbox: self.inbox.clone(),
                         listening: false,
-                        backlog_max: 0,
+                        backlog_max: 4096,
                         pending: Vec::new(),
                         waiters: Vec::new(),
                     },
@@ -140,11 +140,15 @@ impl SocketOps for UnixSocket {
                         return Err(KernelError::TryAgain);
                     }
                     let server_sock = UnixSocket::new(SocketType::Stream);
+                    // For accepted sockets, local address matches the listening path (Linux getsockname).
+                    *server_sock.local_addr.lock_save_irq() = Some(saun);
                     *server_sock.peer_inbox.lock_save_irq() = Some(self.inbox.clone());
                     *server_sock.connected.lock_save_irq() = true;
-                    // Client links to listener inbox to write into server
+
+                    // Client links to accepted socket inbox.
                     *self.peer_inbox.lock_save_irq() = Some(server_sock.inbox.clone());
                     *self.connected.lock_save_irq() = true;
+
                     ep.pending.push(server_sock);
                     // Wake one waiter if present
                     if let Some(w) = ep.waiters.pop() {
@@ -162,13 +166,13 @@ impl SocketOps for UnixSocket {
         }
     }
 
-    async fn listen(&self, backlog: i32) -> Result<()> {
+    async fn listen(&self, mut backlog: i32) -> Result<()> {
         match self.socket_type {
             SocketType::Stream | SocketType::SeqPacket => {}
             SocketType::Datagram => return Err(KernelError::NotSupported),
         }
-        if backlog < 0 {
-            return Err(KernelError::InvalidValue);
+        if backlog <= 0 {
+            backlog = 4096;
         }
         let Some(saun) = &*self.local_addr.lock_save_irq() else {
             return Err(KernelError::InvalidValue);
@@ -187,7 +191,7 @@ impl SocketOps for UnixSocket {
         Ok(())
     }
 
-    async fn accept(&self) -> Result<Box<dyn SocketOps>> {
+    async fn accept(&self) -> Result<(Box<dyn SocketOps>, SockAddr)> {
         {
             if !*self.listening.lock_save_irq() {
                 return Err(KernelError::InvalidValue);
@@ -209,7 +213,9 @@ impl SocketOps for UnixSocket {
             let Some(ep) = reg.get_mut(&path_vec) else {
                 return Poll::Ready(Err(KernelError::InvalidValue));
             };
-            if let Some(sock) = ep.pending.pop() {
+            // Linux accept dequeues in FIFO order.
+            if !ep.pending.is_empty() {
+                let sock = ep.pending.remove(0);
                 Poll::Ready(Ok(sock))
             } else {
                 ep.waiters.push(cx.waker().clone());
@@ -218,7 +224,17 @@ impl SocketOps for UnixSocket {
         })
         .await?;
 
-        Ok(Box::new(sock))
+        // Best-effort peer address. For now we return our own bound path when available.
+        // (Linux often returns unnamed for AF_UNIX unless the peer is bound.)
+        let peer_addr = {
+            let guard = sock.local_addr.lock_save_irq();
+            let Some(saun) = &*guard else {
+                return Err(KernelError::InvalidValue);
+            };
+            SockAddr::Un(*saun)
+        };
+
+        Ok((Box::new(sock), peer_addr))
     }
 
     async fn recv(
@@ -239,15 +255,14 @@ impl SocketOps for UnixSocket {
 
     async fn recvfrom(
         &mut self,
-        _ctx: &mut FileCtx,
-        _buf: UA,
-        _count: usize,
-        _flags: RecvFlags,
+        ctx: &mut FileCtx,
+        buf: UA,
+        count: usize,
+        flags: RecvFlags,
         _addr: Option<SockAddr>,
     ) -> Result<(usize, Option<SockAddr>)> {
-        todo!();
-        // let n = self.recv(ctx, buf, count, flags).await?;
-        // Ok((n, None))
+        let n = self.recv(ctx, buf, count, flags).await?;
+        Ok((n, None))
     }
 
     async fn send(
@@ -289,15 +304,15 @@ impl SocketOps for UnixSocket {
         // self.send(ctx, buf, count, flags).await
     }
 
-    async fn shutdown(&self, how: crate::socket::ShutdownHow) -> Result<()> {
+    async fn shutdown(&self, how: crate::net::ShutdownHow) -> Result<()> {
         match how {
-            crate::socket::ShutdownHow::Read => {
+            crate::net::ShutdownHow::Read => {
                 *self.rd_shutdown.lock_save_irq() = true;
             }
-            crate::socket::ShutdownHow::Write => {
+            crate::net::ShutdownHow::Write => {
                 *self.wr_shutdown.lock_save_irq() = true;
             }
-            crate::socket::ShutdownHow::ReadWrite => {
+            crate::net::ShutdownHow::ReadWrite => {
                 *self.rd_shutdown.lock_save_irq() = true;
                 *self.wr_shutdown.lock_save_irq() = true;
             }
@@ -307,16 +322,5 @@ impl SocketOps for UnixSocket {
 
     fn as_file(self: Box<Self>) -> Box<dyn crate::fs::fops::FileOps> {
         self
-    }
-}
-
-impl Drop for UnixSocket {
-    fn drop(&mut self) {
-        if let Some(saun) = &*self.local_addr.lock_save_irq()
-            && let Some(path) = UnixSocket::path_bytes(saun)
-        {
-            let mut reg = endpoints().lock_save_irq();
-            reg.remove(&path);
-        }
     }
 }

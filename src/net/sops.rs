@@ -1,6 +1,6 @@
 use crate::fs::fops::FileOps;
 use crate::fs::open_file::FileCtx;
-use crate::socket::{ShutdownHow, SockAddr};
+use crate::net::{ShutdownHow, SockAddr};
 use alloc::boxed::Box;
 use async_trait::async_trait;
 use bitflags::bitflags;
@@ -42,7 +42,7 @@ pub trait SocketOps: Send + Sync {
         Err(KernelError::NotSupported)
     }
 
-    async fn accept(&self) -> libkernel::error::Result<Box<dyn SocketOps>> {
+    async fn accept(&self) -> libkernel::error::Result<(Box<dyn SocketOps>, SockAddr)> {
         Err(KernelError::NotSupported)
     }
 

@@ -62,6 +62,7 @@ pub fn kern_err_to_syscall(err: KernelError) -> isize {
         KernelError::NoChildProcess => ECHILD,
         KernelError::OpNotSupported => EOPNOTSUPP,
         KernelError::Interrupted => EINTR,
+        KernelError::NoProcess => ESRCH,
         e => todo!("{e}"),
     }
 }

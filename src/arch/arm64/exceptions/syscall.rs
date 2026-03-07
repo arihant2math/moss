@@ -55,6 +55,16 @@ use crate::{
         mmap::{sys_mmap, sys_mprotect, sys_munmap},
         process_vm::sys_process_vm_readv,
     },
+    net::syscalls::{
+        accept::{sys_accept, sys_accept4},
+        bind::sys_bind,
+        connect::sys_connect,
+        listen::sys_listen,
+        recv::sys_recvfrom,
+        send::sys_sendto,
+        shutdown::sys_shutdown,
+        socket::sys_socket,
+    },
     process::{
         TaskState,
         caps::{sys_capget, sys_capset},
@@ -89,10 +99,6 @@ use crate::{
         threading::{futex::sys_futex, sys_set_robust_list, sys_set_tid_address},
     },
     sched::{current::current_task, sys_sched_yield},
-    socket::syscalls::{
-        accept::sys_accept, bind::sys_bind, connect::sys_connect, listen::sys_listen,
-        send::sys_sendto, shutdown::sys_shutdown, socket::sys_socket,
-    },
 };
 use alloc::boxed::Box;
 use libkernel::{
@@ -518,7 +524,14 @@ pub async fn handle_syscall() {
         0xc6 => sys_socket(arg1 as _, arg2 as _, arg3 as _).await,
         0xc8 => sys_bind(arg1.into(), UA::from_value(arg2 as _), arg3 as _).await,
         0xc9 => sys_listen(arg1.into(), arg2 as _).await,
-        0xca => sys_accept(arg1.into()).await,
+        0xca => {
+            sys_accept(
+                arg1.into(),
+                UA::from_value(arg2 as _),
+                TUA::from_value(arg3 as _),
+            )
+            .await
+        }
         0xcb => sys_connect(arg1.into(), UA::from_value(arg2 as _), arg3 as _).await,
         0xce => {
             sys_sendto(
@@ -528,6 +541,17 @@ pub async fn handle_syscall() {
                 arg4 as _,
                 UA::from_value(arg5 as _),
                 arg6 as _,
+            )
+            .await
+        }
+        0xcf => {
+            sys_recvfrom(
+                arg1.into(),
+                UA::from_value(arg2 as _),
+                arg3 as _,
+                arg4 as _,
+                UA::from_value(arg5 as _),
+                TUA::from_value(arg6 as _),
             )
             .await
         }
@@ -559,6 +583,15 @@ pub async fn handle_syscall() {
         0xe2 => sys_mprotect(VA::from_value(arg1 as _), arg2 as _, arg3 as _),
         0xe8 => sys_mincore(arg1, arg2 as _, TUA::from_value(arg3 as _)).await,
         0xe9 => Ok(0), // sys_madvise is a no-op
+        0xf2 => {
+            sys_accept4(
+                arg1.into(),
+                UA::from_value(arg2 as _),
+                TUA::from_value(arg3 as _),
+                arg4 as _,
+            )
+            .await
+        }
         0x104 => {
             sys_wait4(
                 arg1.cast_signed() as _,

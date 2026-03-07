@@ -1,8 +1,8 @@
+use crate::net::{SocketLen, parse_sockaddr};
 use crate::process::fd_table::Fd;
-use crate::socket::parse_sockaddr;
 use libkernel::memory::address::UA;
 
-pub async fn sys_bind(fd: Fd, addr: UA, addrlen: usize) -> libkernel::error::Result<usize> {
+pub async fn sys_connect(fd: Fd, addr: UA, addrlen: SocketLen) -> libkernel::error::Result<usize> {
     let file = crate::sched::current::current_task()
         .fd_table
         .lock_save_irq()
@@ -14,7 +14,7 @@ pub async fn sys_bind(fd: Fd, addr: UA, addrlen: usize) -> libkernel::error::Res
 
     ops.as_socket()
         .ok_or(libkernel::error::KernelError::NotASocket)?
-        .bind(addr)
+        .connect(addr)
         .await?;
     Ok(0)
 }

@@ -1,9 +1,9 @@
 use crate::fs::fops::FileOps;
 use crate::fs::open_file::OpenFile;
+use crate::net::tcp::TcpSocket;
+use crate::net::unix::UnixSocket;
+use crate::net::{AF_INET, AF_UNIX, IPPROTO_TCP, SOCK_DGRAM, SOCK_SEQPACKET, SOCK_STREAM};
 use crate::sched::current::current_task_shared;
-use crate::socket::tcp::TcpSocket;
-use crate::socket::unix::UnixSocket;
-use crate::socket::{AF_INET, AF_UNIX, IPPROTO_TCP, SOCK_DGRAM, SOCK_SEQPACKET, SOCK_STREAM};
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use libkernel::error::KernelError;

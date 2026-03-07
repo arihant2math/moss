@@ -230,9 +230,17 @@ fn run_test(test_fn: fn()) -> Result<(), i32> {
 
 fn main() {
     println!("Running userspace tests ...");
+    // Get all args
+    let args: Vec<String> = std::env::args().collect();
+    let filter = args.get(1).map(|s| s.as_str());
     let start = std::time::Instant::now();
     let mut failures = 0;
     for test in inventory::iter::<Test> {
+        if let Some(filter) = filter {
+            if !test.test_text.contains(filter) {
+                continue;
+            }
+        }
         print!("{} ...", test.test_text);
         let _ = stdout().flush();
         match run_test(test.test_fn) {

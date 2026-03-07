@@ -8,6 +8,7 @@ use crate::memory::uaccess::{copy_from_user, copy_from_user_slice};
 use crate::sync::OnceLock;
 use crate::sync::SpinLock;
 use alloc::vec;
+use alloc::vec::Vec;
 use core::net::Ipv4Addr;
 use libkernel::error::KernelError;
 use libkernel::memory::address::UA;
@@ -39,6 +40,9 @@ pub const IPPROTO_TCP: i32 = 6;
 #[expect(dead_code)]
 pub const IPPROTO_UDP: i32 = 17;
 
+// TODO: Needs to be u32
+pub type SocketLen = usize;
+
 #[repr(i32)]
 pub enum ShutdownHow {
     Read = 0,
@@ -63,6 +67,34 @@ impl TryFrom<i32> for ShutdownHow {
 pub enum SockAddr {
     In(SockAddrIn),
     Un(SockAddrUn),
+}
+
+impl SockAddr {
+    pub fn len(&self) -> SocketLen {
+        match self {
+            SockAddr::In(_) => size_of::<SockAddrIn>(),
+            SockAddr::Un(_) => size_of::<SockAddrUn>(),
+        }
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        match self {
+            SockAddr::In(sain) => unsafe {
+                core::slice::from_raw_parts(
+                    (sain as *const SockAddrIn).cast::<u8>(),
+                    size_of::<SockAddrIn>(),
+                )
+                .to_vec()
+            },
+            SockAddr::Un(saun) => unsafe {
+                core::slice::from_raw_parts(
+                    (saun as *const SockAddrUn).cast::<u8>(),
+                    size_of::<SockAddrUn>(),
+                )
+                .to_vec()
+            },
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -118,7 +150,7 @@ pub fn process_packets() {
     socket_wait_queue().lock_save_irq().wake_all();
 }
 
-pub async fn parse_sockaddr(uaddr: UA, len: usize) -> Result<SockAddr, KernelError> {
+pub async fn parse_sockaddr(uaddr: UA, len: SocketLen) -> Result<SockAddr, KernelError> {
     use crate::memory::uaccess::try_copy_from_user;
     use libkernel::memory::address::TUA;
 

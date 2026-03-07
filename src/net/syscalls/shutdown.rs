@@ -1,5 +1,5 @@
+use crate::net::ShutdownHow;
 use crate::process::fd_table::Fd;
-use crate::socket::ShutdownHow;
 
 pub async fn sys_shutdown(fd: Fd, how: i32) -> libkernel::error::Result<usize> {
     let file = crate::sched::current::current_task()

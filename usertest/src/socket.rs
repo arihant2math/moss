@@ -2,6 +2,8 @@ use crate::register_test;
 use libc::{AF_INET, AF_UNIX, SOCK_DGRAM, SOCK_STREAM};
 use libc::{accept, bind, connect, listen, shutdown, socket};
 
+use std::io::{Read, Write};
+
 pub fn test_tcp_socket_creation() {
     unsafe {
         let sockfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -176,3 +178,39 @@ pub fn test_unix_socket_fork_msg_passing() {
 }
 
 register_test!(test_unix_socket_fork_msg_passing);
+
+pub fn test_rust_unix_socket() {
+    use std::os::unix::net::{UnixListener, UnixStream};
+    use std::thread;
+
+    let path = "/tmp/rust_uds_test";
+    let listener = UnixListener::bind(path).expect("Failed to bind UNIX socket");
+
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("Failed to accept connection");
+        let mut buf = [0u8; 5];
+        stream
+            .read_exact(&mut buf)
+            .expect("Failed to read from stream");
+        if &buf != b"hello" {
+            panic!("Server read incorrect data");
+        }
+        //     stream
+        //         .write_all(b"world")
+        //         .expect("Failed to write to stream");
+    });
+
+    let mut stream = UnixStream::connect(path).expect("Failed to connect to UNIX socket");
+    stream
+        .write_all(b"hello")
+        .expect("Failed to write to stream");
+    // let mut buf = [0u8; 5];
+    // stream
+    //     .read_exact(&mut buf)
+    //     .expect("Failed to read from stream");
+    // if &buf != b"world" {
+    //     panic!("Client read incorrect data");
+    // }
+}
+
+register_test!(test_rust_unix_socket);

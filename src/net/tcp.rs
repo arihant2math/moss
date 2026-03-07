@@ -1,8 +1,8 @@
 use crate::arch::ArchImpl;
 use crate::fs::fops::FileOps;
 use crate::fs::open_file::FileCtx;
-use crate::socket::sops::{RecvFlags, SendFlags, SocketOps};
-use crate::socket::{ShutdownHow, SockAddr, process_packets, sockets};
+use crate::net::sops::{RecvFlags, SendFlags, SocketOps};
+use crate::net::{ShutdownHow, SockAddr, process_packets, sockets};
 use crate::sync::SpinLock;
 use alloc::boxed::Box;
 use alloc::collections::BTreeSet;
