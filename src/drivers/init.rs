@@ -3,15 +3,14 @@ use super::{
     probe::{DeviceDescriptor, DeviceMatchType, ProbeFn},
 };
 use crate::{drivers::DM, sync::SpinLock};
-use alloc::collections::btree_map::BTreeMap;
-use alloc::sync::Arc;
-use libkernel::error::Result;
+use alloc::{collections::btree_map::BTreeMap, sync::Arc, vec::Vec};
+use libkernel::error::{KernelError, ProbeError, Result};
 use log::error;
 
 pub type InitFunc = fn(&mut PlatformBus, &mut DriverManager) -> Result<()>;
 
 pub struct PlatformBus {
-    probers: BTreeMap<DeviceMatchType, ProbeFn>,
+    probers: BTreeMap<DeviceMatchType, Vec<ProbeFn>>,
 }
 
 impl PlatformBus {
@@ -24,7 +23,7 @@ impl PlatformBus {
     /// Called by driver `init` functions to register their ability to probe for
     /// certain hardware.
     pub fn register_platform_driver(&mut self, match_type: DeviceMatchType, probe_fn: ProbeFn) {
-        self.probers.insert(match_type, probe_fn);
+        self.probers.entry(match_type).or_default().push(probe_fn);
     }
 
     /// Called by the FDT prober to find the right driver and probe.
@@ -53,12 +52,25 @@ impl PlatformBus {
         };
 
         if let Some(match_type) = matcher
-            && let Some(probe_fn) = self.probers.get(&match_type)
+            && let Some(probe_fns) = self.probers.get(&match_type)
         {
-            // We found a match, call the probe function.
-            let driver = (probe_fn)(dm, descr)?;
-            dm.insert_driver(driver.clone());
-            return Ok(Some(driver));
+            // Try each registered probe function until one claims the device.
+            for probe_fn in probe_fns {
+                match (probe_fn)(dm, descr.clone()) {
+                    Ok(driver) => {
+                        dm.insert_driver(driver.clone());
+                        return Ok(Some(driver));
+                    }
+                    Err(KernelError::Probe(ProbeError::NoMatch)) => {
+                        // This driver doesn't want this device, try next.
+                        continue;
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+
+            // All probe functions returned NoMatch.
+            return Err(KernelError::Probe(ProbeError::NoMatch));
         }
 
         Ok(None)
