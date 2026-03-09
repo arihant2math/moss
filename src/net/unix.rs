@@ -349,20 +349,43 @@ impl SocketOps for UnixSocket {
         let Some(peer) = self.peer_inbox.lock_save_irq().clone() else {
             return Err(KernelError::InvalidValue);
         };
-        let local_addr = { self.local_addr.lock_save_irq().unwrap() };
+        let local_addr = {
+            self.local_addr.lock_save_irq().unwrap_or(SockAddrUn {
+                family: crate::net::AF_UNIX as u16,
+                path: [0; 108],
+            })
+        };
         peer.send(local_addr, buf, count).await
     }
 
     async fn sendto(
         &mut self,
         _ctx: &mut FileCtx,
-        _buf: UA,
-        _count: usize,
+        buf: UA,
+        count: usize,
         _flags: SendFlags,
-        _addr: SockAddr,
+        addr: SockAddr,
     ) -> Result<usize> {
-        todo!();
-        // self.send(ctx, buf, count, flags).await
+        let peer_inbox = match addr {
+            SockAddr::Un(saun) => {
+                let Some(path) = UnixSocket::path_bytes(&saun) else {
+                    return Err(KernelError::InvalidValue);
+                };
+                let reg = endpoints().lock_save_irq();
+                let Some(ep) = reg.get(&path) else {
+                    return Err(KernelError::Fs(FsError::NotFound));
+                };
+                ep.inbox.clone()
+            }
+            _ => return Err(KernelError::InvalidValue),
+        };
+        let local_addr = {
+            self.local_addr.lock_save_irq().unwrap_or(SockAddrUn {
+                family: crate::net::AF_UNIX as u16,
+                path: [0; 108],
+            })
+        };
+        peer_inbox.send(local_addr, buf, count).await
     }
 
     async fn shutdown(&self, how: crate::net::ShutdownHow) -> Result<()> {

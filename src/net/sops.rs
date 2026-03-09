@@ -95,7 +95,8 @@ where
         buf: UA,
         count: usize,
     ) -> libkernel::error::Result<usize> {
-        self.recv(ctx, buf, count, RecvFlags::empty()).await
+        self.recv(ctx, buf, count, RecvFlags::empty())
+            .await
             .map(|(len, _)| len)
     }
 
