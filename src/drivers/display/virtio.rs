@@ -4,7 +4,7 @@ use crate::{
     arch::ArchImpl,
     drivers::{
         Driver, DriverManager,
-        display::{Display, FramebufferGuard, set_system_display},
+        display::{Bitfield, Display, FramebufferGuard, FixScreeninfo, VarScreeninfo, set_system_display},
         init::PlatformBus,
         probe::{DeviceDescriptor, DeviceMatchType},
     },
@@ -28,6 +28,7 @@ use virtio_drivers::{
         mmio::{MmioTransport, VirtIOHeader},
     },
 };
+use crate::drivers::display::{};
 
 /// A system display backed by VirtIO-GPU in framebuffer mode.
 pub struct VirtioGpuDisplay<T: Transport + Send> {
@@ -57,9 +58,9 @@ impl<T: Transport + Send> VirtioGpuDisplay<T> {
 
         Ok(Self {
             fdt_name,
-            gpu: crate::sync::SpinLock::new(gpu),
-            fb_addr: crate::sync::SpinLock::new(fb_addr),
-            fb_len: crate::sync::SpinLock::new(fb_len),
+            gpu: SpinLock::new(gpu),
+            fb_addr: SpinLock::new(fb_addr),
+            fb_len: SpinLock::new(fb_len),
         })
     }
 }
@@ -71,11 +72,83 @@ impl<T: Transport + Send + Sync + 'static> Driver for VirtioGpuDisplay<T> {
 }
 
 impl<T: Transport + Send + Sync + 'static> Display for VirtioGpuDisplay<T> {
-    fn resolution(&self) -> (usize, usize) {
+    fn f_screen_info(&self) -> FixScreeninfo {
         let mut gpu = self.gpu.lock_save_irq();
-        match gpu.resolution() {
+        let (width, _height) = match gpu.resolution() {
             Ok((w, h)) => (w as usize, h as usize),
             Err(_) => (0, 0),
+        };
+        FixScreeninfo {
+            id: [0; 16],
+            smem_start: 0,
+            smem_len: 0,
+            fb_type: 0,
+            type_aux: 0,
+            visual: 0,
+            xpanstep: 0,
+            ypanstep: 0,
+            ywrapstep: 0,
+            line_length: (width * 4) as u32,
+            mmio_start: 0,
+            mmio_len: 0,
+            accel: 0,
+            capabilities: 0,
+            reserved: [0; 2],
+        }
+    }
+
+    fn v_screen_info(&self) -> VarScreeninfo {
+        let mut gpu = self.gpu.lock_save_irq();
+        let (width, height) = match gpu.resolution() {
+            Ok((w, h)) => (w as usize, h as usize),
+            Err(_) => (0, 0),
+        };
+        VarScreeninfo {
+            xres: width as u32,
+            yres: height as u32,
+            xres_virtual: width as u32,
+            yres_virtual: height as u32,
+            xoffset: 0,
+            yoffset: 0,
+            bits_per_pixel: 0,
+            grayscale: 0,
+            red: Bitfield {
+                offset: 0,
+                length: 0,
+                msb_right: 0,
+            },
+            green: Bitfield {
+                offset: 0,
+                length: 0,
+                msb_right: 0,
+            },
+            blue: Bitfield {
+                offset: 0,
+                length: 0,
+                msb_right: 0,
+            },
+            transp: Bitfield {
+                offset: 0,
+                length: 0,
+                msb_right: 0,
+            },
+            nonstd: 0,
+            activate: 0,
+            height: height as u32,
+            width: width as u32,
+            accel_flags: 0,
+            pixclock: 0,
+            left_margin: 0,
+            right_margin: 0,
+            upper_margin: 0,
+            lower_margin: 0,
+            hsync_len: 0,
+            vsync_len: 0,
+            sync: 0,
+            vmode: 0,
+            rotate: 0,
+            colorspace: 0,
+            reserved: [0; 4],
         }
     }
 

@@ -4,7 +4,7 @@ use crate::drivers::{CharDriver, DriverManager, OpenableDevice, ReservedMajors};
 use crate::fs::fops::FileOps;
 use crate::fs::open_file::{FileCtx, OpenFile};
 use crate::kernel_driver;
-use crate::memory::uaccess::{copy_from_user_slice, copy_to_user_slice};
+use crate::memory::uaccess::{copy_from_user_slice, copy_to_user, copy_to_user_slice, UserCopyable};
 use crate::sync::OnceLock;
 use alloc::string::ToString;
 use alloc::{boxed::Box, sync::Arc};
@@ -14,7 +14,7 @@ use libkernel::driver::CharDevDescriptor;
 use libkernel::error::{FsError, KernelError};
 use libkernel::fs::OpenFlags;
 use libkernel::fs::attr::FilePermissions;
-use libkernel::memory::address::UA;
+use libkernel::memory::address::{TUA, UA};
 
 pub mod virtio;
 
@@ -23,9 +23,6 @@ pub mod virtio;
 ///
 /// The underlying implementation may be MMIO, VirtIO, etc.
 pub trait Display: Send + Sync + super::Driver {
-    /// Returns the current resolution in pixels.
-    fn resolution(&self) -> (usize, usize);
-
     /// Locks and returns a mutable view of the framebuffer in RGBA8888 format.
     ///
     /// The returned guard must keep the lock held for as long as the slice is used,
@@ -36,6 +33,14 @@ pub trait Display: Send + Sync + super::Driver {
 
     /// Flush any pending framebuffer updates to the physical display.
     fn flush(&self) -> libkernel::error::Result<()>;
+
+    fn f_screen_info(&self) -> FixScreeninfo;
+    fn v_screen_info(&self) -> VarScreeninfo;
+
+    fn resolution(&self) -> (usize, usize) {
+        let info = self.v_screen_info();
+        (info.xres as usize, info.yres as usize)
+    }
 }
 
 /// A guard that keeps the underlying display locked while the framebuffer slice is borrowed.
@@ -98,6 +103,72 @@ pub fn set_system_display(display: Arc<dyn Display>) -> Result<(), Arc<dyn Displ
 pub fn system_display() -> Option<Arc<dyn Display>> {
     SYS_DISPLAY.get().cloned()
 }
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct Bitfield {
+    pub offset: u32,
+    pub length: u32,
+    pub msb_right: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct VarScreeninfo {
+    pub xres: u32,
+    pub yres: u32,
+    pub xres_virtual: u32,
+    pub yres_virtual: u32,
+    pub xoffset: u32,
+    pub yoffset: u32,
+    pub bits_per_pixel: u32,
+    pub grayscale: u32,
+    pub red: Bitfield,
+    pub green: Bitfield,
+    pub blue: Bitfield,
+    pub transp: Bitfield,
+    pub nonstd: u32,
+    pub activate: u32,
+    pub height: u32,
+    pub width: u32,
+    pub accel_flags: u32,
+    pub pixclock: u32,
+    pub left_margin: u32,
+    pub right_margin: u32,
+    pub upper_margin: u32,
+    pub lower_margin: u32,
+    pub hsync_len: u32,
+    pub vsync_len: u32,
+    pub sync: u32,
+    pub vmode: u32,
+    pub rotate: u32,
+    pub colorspace: u32,
+    pub reserved: [u32; 4],
+}
+
+unsafe impl UserCopyable for VarScreeninfo {}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct FixScreeninfo {
+    pub id: [u8; 16],
+    pub smem_start: usize,
+    pub smem_len: u32,
+    pub fb_type: u32,
+    pub type_aux: u32,
+    pub visual: u32,
+    pub xpanstep: u16,
+    pub ypanstep: u16,
+    pub ywrapstep: u16,
+    pub line_length: u32,
+    pub mmio_start: usize,
+    pub mmio_len: u32,
+    pub accel: u32,
+    pub capabilities: u16,
+    pub reserved: [u16; 2],
+}
+
+unsafe impl UserCopyable for FixScreeninfo {}
 
 /// `/dev/fb0` file operations.
 struct FbFileOps;
@@ -162,7 +233,7 @@ impl FileOps for FbFileOps {
         &mut self,
         _ctx: &mut FileCtx,
         request: usize,
-        _argp: usize,
+        argp: usize,
     ) -> libkernel::error::Result<usize> {
         const FBIOGET_VSCREENINFO: usize = 0x4600;
         const FBIOPUT_VSCREENINFO: usize = 0x4601;
@@ -170,9 +241,19 @@ impl FileOps for FbFileOps {
         const FBIOPAN_DISPLAY: usize = 0x4606;
 
         match request {
-            FBIOGET_VSCREENINFO => todo!(),
+            FBIOGET_VSCREENINFO => {
+                let display = system_display().ok_or(KernelError::Other("no display device"))?;
+                let info = display.v_screen_info();
+                copy_to_user(TUA::from_value(argp), info).await?;
+                Ok(0)
+            },
             FBIOPUT_VSCREENINFO => todo!(),
-            FBIOGET_FSCREENINFO => todo!(),
+            FBIOGET_FSCREENINFO => {
+                let display = system_display().ok_or(KernelError::Other("no display device"))?;
+                let info = display.f_screen_info();
+                copy_to_user(TUA::from_value(argp), info).await?;
+                Ok(0)
+            }
             FBIOPAN_DISPLAY => todo!(),
             _ => Err(KernelError::InvalidValue),
         }
