@@ -1,6 +1,6 @@
 use super::{
-    Tid, find_task_by_tid,
-    thread_group::{ThreadGroup, pid::PidT, wait::ChildState},
+    Task, Tid, find_task_by_tid,
+    thread_group::{ThreadGroup, pid::PidT, wait::TraceTrap},
 };
 use crate::{
     arch::{Arch, ArchImpl},
@@ -149,7 +149,7 @@ impl PTrace {
     }
 
     /// Notify parents of a trap event.
-    pub fn notify_tracer_of_trap(&self, me: &Arc<ThreadGroup>) {
+    pub fn notify_tracer_of_trap(&self, task: &Arc<Task>) {
         let Some(trap_signal) = (match self.state {
             // For non-signal trace events, we use SIGTRAP.
             Some(PTraceState::TracePointHit { hit_point, .. }) => match hit_point {
@@ -163,14 +163,11 @@ impl PTrace {
             return;
         };
 
-        // Notify the parent that we have stopped (SIGCHLD).
+        // Notify the tracer that we have stopped (SIGCHLD).
         if let Some(tracer) = self.tracer.as_ref() {
-            tracer.child_notifiers.child_update(
-                me.tgid,
-                ChildState::TraceTrap {
-                    signal: trap_signal,
-                    mask: self.calc_trace_point_mask(),
-                },
+            tracer.child_notifiers.ptrace_notify(
+                task.tid,
+                TraceTrap::new(trap_signal, self.calc_trace_point_mask()),
             );
 
             tracer
@@ -275,7 +272,7 @@ pub async fn ptrace_stop(ctx: &ProcessCtx, point: TracePoint) -> bool {
 
             notified = true;
             ptrace.set_waker(cx.waker().clone());
-            ptrace.notify_tracer_of_trap(&task_sh.process);
+            ptrace.notify_tracer_of_trap(task_sh);
             Poll::Pending
         } else if matches!(ptrace.state, Some(PTraceState::Running)) {
             // Tracer resumed us.

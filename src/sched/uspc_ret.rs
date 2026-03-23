@@ -192,7 +192,7 @@ pub fn dispatch_userspace_task(frame: *mut UserCtx) {
                     let mut ptrace = ctx.task().ptrace.lock_save_irq();
                     if ptrace.trace_signal(signal, ctx.task().ctx.user()) {
                         ptrace.set_waker(current_work_waker());
-                        ptrace.notify_tracer_of_trap(&ctx.task().process);
+                        ptrace.notify_tracer_of_trap(ctx.shared());
                         drop(ptrace);
 
                         if current_work().state.try_pending_stop() {

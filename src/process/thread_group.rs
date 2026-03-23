@@ -18,7 +18,7 @@ use libkernel::fs::pathbuf::PathBuf;
 use pid::PidT;
 use rsrc_lim::ResourceLimits;
 use signal::{SigId, SigSet, SignalActionState};
-use wait::ChildNotifiers;
+use wait::Notifiers;
 
 pub mod builder;
 pub mod pid;
@@ -109,7 +109,7 @@ pub struct ThreadGroup {
     pub rsrc_lim: Arc<SpinLock<ResourceLimits>>,
     pub pending_signals: SpinLock<SigSet>,
     pub priority: SpinLock<i8>,
-    pub child_notifiers: ChildNotifiers,
+    pub child_notifiers: Notifiers,
     pub utime: AtomicUsize,
     pub stime: AtomicUsize,
     pub last_account: AtomicUsize,

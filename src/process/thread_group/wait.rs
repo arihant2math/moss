@@ -3,10 +3,10 @@ use super::{
     pid::PidT,
     signal::{InterruptResult, Interruptable, SigId},
 };
-use crate::clock::timespec::TimeSpec;
 use crate::memory::uaccess::{UserCopyable, copy_to_user};
 use crate::sched::syscall_ctx::ProcessCtx;
 use crate::sync::CondVar;
+use crate::{clock::timespec::TimeSpec, process::Tid};
 use alloc::collections::btree_map::BTreeMap;
 use bitflags::Flags;
 use libkernel::sync::condvar::WakeupType;
@@ -74,8 +74,25 @@ pub enum ChildState {
     NormalExit { code: u32 },
     SignalExit { signal: SigId, core: bool },
     Stop { signal: SigId },
-    TraceTrap { signal: SigId, mask: i32 },
     Continue,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct TraceTrap {
+    signal: SigId,
+    mask: i32,
+}
+
+impl TraceTrap {
+    pub fn new(signal: SigId, mask: i32) -> Self {
+        Self { signal, mask }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum WaitEvent {
+    Child(ChildState),
+    Ptrace(TraceTrap),
 }
 
 impl ChildState {
@@ -85,33 +102,55 @@ impl ChildState {
                 flags.contains(WaitFlags::WEXITED)
             }
             ChildState::Stop { .. } => flags.contains(WaitFlags::WSTOPPED),
-            // Always wake up on a trace trap.
-            ChildState::TraceTrap { .. } => true,
             ChildState::Continue => flags.contains(WaitFlags::WCONTINUED),
         }
     }
 }
 
-pub struct ChildNotifiers {
-    inner: CondVar<BTreeMap<Tgid, ChildState>>,
+struct NotifierState {
+    children: BTreeMap<Tgid, ChildState>,
+    ptrace: BTreeMap<Tid, TraceTrap>,
 }
 
-impl Default for ChildNotifiers {
+impl NotifierState {
+    fn new() -> Self {
+        Self {
+            children: BTreeMap::new(),
+            ptrace: BTreeMap::new(),
+        }
+    }
+}
+
+pub struct Notifiers {
+    inner: CondVar<NotifierState>,
+}
+
+impl Default for Notifiers {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ChildNotifiers {
+impl Notifiers {
     pub fn new() -> Self {
         Self {
-            inner: CondVar::new(BTreeMap::new()),
+            inner: CondVar::new(NotifierState::new()),
         }
     }
 
     pub fn child_update(&self, tgid: Tgid, new_state: ChildState) {
         self.inner.update(|state| {
-            state.insert(tgid, new_state);
+            state.children.insert(tgid, new_state);
+
+            // Since some wakers may be conditional upon state update changes,
+            // notify everyone whenever a child updates it's state.
+            WakeupType::All
+        });
+    }
+
+    pub fn ptrace_notify(&self, tid: Tid, ptrace_trap: TraceTrap) {
+        self.inner.update(|state| {
+            state.ptrace.insert(tid, ptrace_trap);
 
             // Since some wakers may be conditional upon state update changes,
             // notify everyone whenever a child updates it's state.
@@ -120,13 +159,14 @@ impl ChildNotifiers {
     }
 }
 
-fn do_wait(
-    state: &mut BTreeMap<Tgid, ChildState>,
+fn find_child_event(
+    children: &mut BTreeMap<Tgid, ChildState>,
     pid: PidT,
     flags: WaitFlags,
-) -> Option<(Tgid, ChildState)> {
+    remove_entry: bool,
+) -> Option<(PidT, WaitEvent)> {
     let key = if pid == -1 {
-        state.iter().find_map(|(k, v)| {
+        children.iter().find_map(|(k, v)| {
             if v.matches_wait_flags(flags) {
                 Some(*k)
             } else {
@@ -136,7 +176,7 @@ fn do_wait(
     } else if pid < -1 {
         // Wait for any child whose process group ID matches abs(pid)
         let target_pgid = Pgid((-pid) as u32);
-        state.iter().find_map(|(k, v)| {
+        children.iter().find_map(|(k, v)| {
             if !v.matches_wait_flags(flags) {
                 return None;
             }
@@ -151,7 +191,7 @@ fn do_wait(
             }
         })
     } else {
-        state
+        children
             .get_key_value(&Tgid::from_pid_t(pid))
             .and_then(|(k, v)| {
                 if v.matches_wait_flags(flags) {
@@ -162,52 +202,53 @@ fn do_wait(
             })
     }?;
 
-    Some(state.remove_entry(&key).unwrap())
+    if remove_entry {
+        children
+            .remove_entry(&key)
+            .map(|(k, v)| (k.value() as PidT, WaitEvent::Child(v)))
+    } else {
+        children
+            .get(&key)
+            .map(|v| (key.value() as PidT, WaitEvent::Child(*v)))
+    }
 }
 
-// Non-consuming wait finder to support WNOWAIT
-fn find_waitable(
-    state: &BTreeMap<Tgid, ChildState>,
+fn find_ptrace_event(
+    ptrace: &mut BTreeMap<Tid, TraceTrap>,
     pid: PidT,
-    flags: WaitFlags,
-) -> Option<(Tgid, ChildState)> {
+    remove_entry: bool,
+) -> Option<(PidT, WaitEvent)> {
+    // Ptrace events are always eligible for collection regardless of wait
+    // flags. The WSTOPPED/WUNTRACED filtering only governs non-traced
+    // group-stop events in the children map.
     let key = if pid == -1 {
-        state.iter().find_map(|(k, v)| {
-            if v.matches_wait_flags(flags) {
-                Some(*k)
-            } else {
-                None
-            }
-        })
+        ptrace.keys().next().copied()
     } else if pid < -1 {
-        let target_pgid = Pgid((-pid) as u32);
-        state.iter().find_map(|(k, v)| {
-            if !v.matches_wait_flags(flags) {
-                return None;
-            }
-            if let Some(tg) = ThreadGroup::get(*k) {
-                if *tg.pgid.lock_save_irq() == target_pgid {
-                    Some(*k)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        })
+        // TODO: pgid matching for ptrace events
+        None
     } else {
-        state
-            .get_key_value(&Tgid::from_pid_t(pid))
-            .and_then(|(k, v)| {
-                if v.matches_wait_flags(flags) {
-                    Some(*k)
-                } else {
-                    None
-                }
-            })
+        let tid = Tid::from_pid_t(pid);
+        ptrace.contains_key(&tid).then_some(tid)
     }?;
 
-    state.get(&key).map(|v| (key, *v))
+    let event = if remove_entry {
+        ptrace.remove(&key)?
+    } else {
+        *ptrace.get(&key)?
+    };
+
+    Some((key.value() as PidT, WaitEvent::Ptrace(event)))
+}
+
+fn find_event(
+    state: &mut NotifierState,
+    pid: PidT,
+    flags: WaitFlags,
+    remove_entry: bool,
+) -> Option<(PidT, WaitEvent)> {
+    // Ptrace events are always eligible and take priority.
+    find_ptrace_event(&mut state.ptrace, pid, remove_entry)
+        .or_else(|| find_child_event(&mut state.children, pid, flags, remove_entry))
 }
 
 pub async fn sys_wait4(
@@ -250,13 +291,13 @@ pub async fn sys_wait4(
 
     let child_proc_count = task.process.children.lock_save_irq().iter().count();
 
-    let (tgid, child_state) = if child_proc_count == 0 || flags.contains(WaitFlags::WNOHANG) {
+    let (ret_pid, event) = if child_proc_count == 0 || flags.contains(WaitFlags::WNOHANG) {
         // Special case for no children. See if there are any pending child
         // notification events without sleeping. If there are no children and no
         // pending events, return ECHILD.
         let mut ret = None;
         task.process.child_notifiers.inner.update(|s| {
-            ret = do_wait(s, pid, flags);
+            ret = find_event(s, pid, flags, true);
             WakeupType::None
         });
 
@@ -270,7 +311,7 @@ pub async fn sys_wait4(
             .process
             .child_notifiers
             .inner
-            .wait_until(|state| do_wait(state, pid, flags))
+            .wait_until(|state| find_event(state, pid, flags, true))
             .interruptable()
             .await
         {
@@ -280,34 +321,34 @@ pub async fn sys_wait4(
     };
 
     if !stat_addr.is_null() {
-        match child_state {
-            ChildState::NormalExit { code } => {
+        match event {
+            WaitEvent::Child(ChildState::NormalExit { code }) => {
                 copy_to_user(stat_addr, (code as i32 & 0xff) << 8).await?;
             }
-            ChildState::SignalExit { signal, core } => {
+            WaitEvent::Child(ChildState::SignalExit { signal, core }) => {
                 copy_to_user(
                     stat_addr,
                     (signal.user_id() as i32) | if core { 0x80 } else { 0x0 },
                 )
                 .await?;
             }
-            ChildState::Stop { signal } => {
+            WaitEvent::Child(ChildState::Stop { signal }) => {
                 copy_to_user(stat_addr, ((signal.user_id() as i32) << 8) | 0x7f).await?;
             }
-            ChildState::TraceTrap { signal, mask } => {
+            WaitEvent::Ptrace(TraceTrap { signal, mask }) => {
                 copy_to_user(
                     stat_addr,
                     ((signal.user_id() as i32) << 8) | 0x7f | mask << 8,
                 )
                 .await?;
             }
-            ChildState::Continue => {
+            WaitEvent::Child(ChildState::Continue) => {
                 copy_to_user(stat_addr, 0xffff).await?;
             }
         }
     }
 
-    Ok(tgid.value() as _)
+    Ok(ret_pid as _)
 }
 
 // idtype for waitid
@@ -367,18 +408,17 @@ pub async fn sys_waitid(
     };
 
     let task = ctx.shared();
+
     let child_proc_count = task.process.children.lock_save_irq().iter().count();
 
     // Try immediate check if no children or WNOHANG
-    let child_state = if child_proc_count == 0 || flags.contains(WaitFlags::WNOHANG) {
-        let mut ret: Option<ChildState> = None;
+    let event = if child_proc_count == 0 || flags.contains(WaitFlags::WNOHANG) {
+        let mut ret: Option<WaitEvent> = None;
+
         task.process.child_notifiers.inner.update(|s| {
-            // Use non-consuming finder for WNOWAIT, else consume
-            ret = if flags.contains(WaitFlags::WNOWAIT) {
-                find_waitable(s, sel_pid, flags).map(|(_, state)| state)
-            } else {
-                do_wait(s, sel_pid, flags).map(|(_, state)| state)
-            };
+            // Don't consume on WNOWAIT.
+            ret = find_event(s, sel_pid, flags, !flags.contains(WaitFlags::WNOWAIT))
+                .map(|(_, event)| event);
             WakeupType::None
         });
 
@@ -389,19 +429,15 @@ pub async fn sys_waitid(
         }
     } else {
         // Wait until a child matches; first find key, then remove conditionally
-        let (_, state) = task
-            .process
+        task.process
             .child_notifiers
             .inner
             .wait_until(|s| {
-                if flags.contains(WaitFlags::WNOWAIT) {
-                    find_waitable(s, sel_pid, flags)
-                } else {
-                    do_wait(s, sel_pid, flags)
-                }
+                // Don't consume on WNOWAIT.
+                find_event(s, sel_pid, flags, !flags.contains(WaitFlags::WNOWAIT))
             })
-            .await;
-        state
+            .await
+            .1
     };
 
     // Populate siginfo
@@ -411,24 +447,24 @@ pub async fn sys_waitid(
             code: 0,
             errno: 0,
         };
-        match child_state {
-            ChildState::NormalExit { code } => {
+        match event {
+            WaitEvent::Child(ChildState::NormalExit { code }) => {
                 siginfo.code = CLD_EXITED;
                 siginfo.errno = code as i32;
             }
-            ChildState::SignalExit { signal, core } => {
+            WaitEvent::Child(ChildState::SignalExit { signal, core }) => {
                 siginfo.code = if core { CLD_DUMPED } else { CLD_KILLED };
                 siginfo.errno = signal.user_id() as i32;
             }
-            ChildState::Stop { signal } => {
+            WaitEvent::Child(ChildState::Stop { signal }) => {
                 siginfo.code = CLD_STOPPED;
                 siginfo.errno = signal.user_id() as i32;
             }
-            ChildState::TraceTrap { signal, .. } => {
+            WaitEvent::Ptrace(TraceTrap { signal, .. }) => {
                 siginfo.code = CLD_TRAPPED;
                 siginfo.errno = signal.user_id() as i32;
             }
-            ChildState::Continue => {
+            WaitEvent::Child(ChildState::Continue) => {
                 siginfo.code = CLD_CONTINUED;
             }
         }

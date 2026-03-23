@@ -8,7 +8,7 @@ use super::{
     Pgid, ProcessState, Sid, TG_LIST, Tgid, ThreadGroup,
     rsrc_lim::ResourceLimits,
     signal::{SigSet, SignalActionState},
-    wait::ChildNotifiers,
+    wait::Notifiers,
 };
 
 /// A builder for creating ThreadGroup instances.
@@ -79,7 +79,7 @@ impl ThreadGroupBuilder {
                 .rsrc_lim
                 .unwrap_or_else(|| Arc::new(SpinLock::new(ResourceLimits::default()))),
             pending_signals: SpinLock::new(SigSet::empty()),
-            child_notifiers: ChildNotifiers::new(),
+            child_notifiers: Notifiers::new(),
             priority: SpinLock::new(self.pri.unwrap_or(0)),
             utime: AtomicUsize::new(0),
             stime: AtomicUsize::new(0),
