@@ -3,7 +3,8 @@ use crate::drivers::fs::proc::get_inode_id;
 use crate::drivers::fs::proc::meminfo::ProcMeminfoInode;
 use crate::drivers::fs::proc::stat::ProcStatInode;
 use crate::drivers::fs::proc::task::ProcTaskInode;
-use crate::process::{TASK_LIST, TaskDescriptor, Tid};
+use crate::process::thread_group::pid::PidT;
+use crate::process::{TASK_LIST, TaskDescriptor, Tid, find_task_by_tid};
 use crate::sched::current_work;
 use alloc::boxed::Box;
 use alloc::string::ToString;
@@ -44,6 +45,7 @@ impl Inode for ProcRootInode {
 
         // Lookup a PID directory.
         let desc = if name == "self" {
+            // FIXME: The group leader may have exited.
             TaskDescriptor::from_tgid_tid(current.pgid(), Tid::from_tgid(current.pgid()))
         } else if name == "thread-self" {
             current.descriptor()
@@ -60,18 +62,15 @@ impl Inode for ProcRootInode {
                 InodeId::from_fsid_and_inodeid(self.id.fs_id(), get_inode_id(&["cmdline"])),
             )));
         } else {
-            let pid: u32 = name.parse().map_err(|_| FsError::NotFound)?;
+            let pid: PidT = name.parse().map_err(|_| FsError::NotFound)?;
             // Search for the task descriptor.
-            TASK_LIST
-                .lock_save_irq()
-                .keys()
-                .find(|d| d.tgid().value() == pid)
-                .cloned()
+            find_task_by_tid(Tid::from_pid_t(pid))
                 .ok_or(FsError::NotFound)?
+                .descriptor()
         };
 
         Ok(Arc::new(ProcTaskInode::new(
-            desc,
+            desc.tid(),
             false,
             InodeId::from_fsid_and_inodeid(self.id.fs_id(), get_inode_id(&[name])),
         )))
@@ -85,14 +84,14 @@ impl Inode for ProcRootInode {
         let mut entries: Vec<Dirent> = Vec::new();
         // Gather task list under interrupt-safe lock.
         let task_list = TASK_LIST.lock_save_irq();
-        for (desc, _) in task_list
+        for (tid, _) in task_list
             .iter()
             .filter(|(_, task)| task.upgrade().is_some())
         {
-            let name = desc.tgid().value().to_string();
+            let name = tid.value().to_string();
             let inode_id = InodeId::from_fsid_and_inodeid(
                 PROCFS_ID,
-                get_inode_id(&[&desc.tgid().value().to_string()]),
+                get_inode_id(&[&tid.value().to_string()]),
             );
             let next_offset = (entries.len() + 1) as u64;
             entries.push(Dirent::new(

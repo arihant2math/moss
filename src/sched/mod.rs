@@ -249,7 +249,10 @@ pub fn sched_init() {
     {
         let mut task_list = TASK_LIST.lock_save_irq();
 
-        task_list.insert(init_work.task.descriptor(), Arc::downgrade(&init_work));
+        task_list.insert(
+            init_work.task.descriptor().tid(),
+            Arc::downgrade(&init_work),
+        );
     }
 
     insert_work(init_work);

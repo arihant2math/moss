@@ -13,15 +13,12 @@ use alloc::{
 };
 use builder::ThreadGroupBuilder;
 use core::sync::atomic::AtomicUsize;
-use core::{
-    fmt::Display,
-    sync::atomic::{AtomicU32, Ordering},
-};
+use core::{fmt::Display, sync::atomic::Ordering};
 use libkernel::fs::pathbuf::PathBuf;
 use pid::PidT;
 use rsrc_lim::ResourceLimits;
 use signal::{SigId, SigSet, SignalActionState};
-use wait::ChildNotifiers;
+use wait::Notifiers;
 
 pub mod builder;
 pub mod pid;
@@ -55,7 +52,11 @@ impl Tgid {
         Self(0)
     }
 
-    pub fn from_pid_t(pid: PidT) -> Tgid {
+    fn from_tid(tid: Tid) -> Tgid {
+        Self(tid.0)
+    }
+
+    fn from_pid_t(pid: PidT) -> Tgid {
         Self(pid as _)
     }
 }
@@ -108,36 +109,18 @@ pub struct ThreadGroup {
     pub rsrc_lim: Arc<SpinLock<ResourceLimits>>,
     pub pending_signals: SpinLock<SigSet>,
     pub priority: SpinLock<i8>,
-    pub child_notifiers: ChildNotifiers,
+    pub child_notifiers: Notifiers,
     pub utime: AtomicUsize,
     pub stime: AtomicUsize,
     pub last_account: AtomicUsize,
     pub executable: SpinLock<Option<PathBuf>>,
-    next_tid: AtomicU32,
 }
 
 unsafe impl Send for ThreadGroup {}
 
 impl ThreadGroup {
-    // Return the next available thread id. Will never return a thread whose ID
-    // == TGID, since that is defined as the main, root thread.
-    pub fn next_tid(&self) -> Tid {
-        let mut v = self.next_tid.fetch_add(1, Ordering::Relaxed);
-
-        // Skip the TGID.
-        if v == self.tgid.value() {
-            v = self.next_tid.fetch_add(1, Ordering::Relaxed);
-        }
-
-        Tid(v)
-    }
-
-    pub fn next_tgid() -> Tgid {
-        Tgid(NEXT_TGID.fetch_add(1, Ordering::SeqCst))
-    }
-
-    pub fn new_child(self: Arc<Self>, share_state: bool) -> (Arc<ThreadGroup>, Tid) {
-        let mut builder = ThreadGroupBuilder::new(Self::next_tgid()).with_parent(self.clone());
+    pub fn new_child(self: Arc<Self>, share_state: bool, tid: Tid) -> Arc<ThreadGroup> {
+        let mut builder = ThreadGroupBuilder::new(Tgid::from_tid(tid)).with_parent(self.clone());
 
         if share_state {
             builder = builder
@@ -159,7 +142,7 @@ impl ThreadGroup {
             .lock_save_irq()
             .insert(new_tg.tgid, new_tg.clone());
 
-        (new_tg.clone(), Tid(new_tg.tgid.value()))
+        new_tg.clone()
     }
 
     pub fn get(id: Tgid) -> Option<Arc<Self>> {
@@ -220,8 +203,5 @@ impl Drop for ThreadGroup {
         TG_LIST.lock_save_irq().remove(&self.tgid);
     }
 }
-
-// the idle process (0) and the init process (1) are allocated manually.
-static NEXT_TGID: AtomicU32 = AtomicU32::new(2);
 
 static TG_LIST: SpinLock<BTreeMap<Tgid, Weak<ThreadGroup>>> = SpinLock::new(BTreeMap::new());

@@ -5,7 +5,7 @@ use libkernel::{
 
 use crate::{
     memory::uaccess::{UserCopyable, copy_from_user, copy_to_user},
-    process::thread_group::{TG_LIST, Tgid},
+    process::{Tid, find_task_by_tid},
     sched::syscall_ctx::ProcessCtx,
 };
 
@@ -195,10 +195,8 @@ pub async fn sys_prlimit64(
     let task = if pid == 0 {
         ctx.shared().process.clone()
     } else {
-        TG_LIST
-            .lock_save_irq()
-            .get(&Tgid::from_pid_t(pid))
-            .and_then(|x| x.upgrade())
+        find_task_by_tid(Tid::from_pid_t(pid))
+            .map(|x| x.process.clone())
             .ok_or(KernelError::NoProcess)?
     };
 

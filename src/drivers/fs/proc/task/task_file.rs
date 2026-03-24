@@ -1,4 +1,4 @@
-use crate::process::{TASK_LIST, Tid, find_task_by_descriptor};
+use crate::process::{Tid, find_task_by_tid};
 use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -81,18 +81,7 @@ impl SimpleFile for ProcTaskFileInode {
     }
 
     async fn read(&self) -> libkernel::error::Result<Vec<u8>> {
-        let tid = self.tid;
-        let task_list = TASK_LIST.lock_save_irq();
-        let id = task_list
-            .iter()
-            .find(|(desc, _)| desc.tid() == tid)
-            .map(|(desc, _)| *desc);
-        drop(task_list);
-        let task_details = if let Some(desc) = id {
-            find_task_by_descriptor(&desc)
-        } else {
-            None
-        };
+        let task_details = find_task_by_tid(self.tid);
 
         let status_string = if let Some(task) = task_details {
             let state = task.state.load(core::sync::atomic::Ordering::Relaxed);
@@ -216,56 +205,24 @@ Threads:\t{tasks}\n",
 
     async fn readlink(&self) -> libkernel::error::Result<PathBuf> {
         if let TaskFileType::Cwd = self.file_type {
-            let tid = self.tid;
-            let task_list = TASK_LIST.lock_save_irq();
-            let id = task_list
-                .iter()
-                .find(|(desc, _)| desc.tid() == tid)
-                .map(|(desc, _)| *desc);
-            drop(task_list);
-            let task_details = if let Some(desc) = id {
-                find_task_by_descriptor(&desc)
-            } else {
-                None
-            };
-            return if let Some(task) = task_details {
+            let task = find_task_by_tid(self.tid);
+            return if let Some(task) = task {
                 let cwd = task.cwd.lock_save_irq();
                 Ok(cwd.1.clone())
             } else {
                 Err(FsError::NotFound.into())
             };
         } else if let TaskFileType::Root = self.file_type {
-            let tid = self.tid;
-            let task_list = TASK_LIST.lock_save_irq();
-            let id = task_list
-                .iter()
-                .find(|(desc, _)| desc.tid() == tid)
-                .map(|(desc, _)| *desc);
-            drop(task_list);
-            let task_details = if let Some(desc) = id {
-                find_task_by_descriptor(&desc)
-            } else {
-                None
-            };
-            return if let Some(task) = task_details {
+            let task = find_task_by_tid(self.tid);
+            return if let Some(task) = task {
                 let root = task.root.lock_save_irq();
                 Ok(root.1.clone())
             } else {
                 Err(FsError::NotFound.into())
             };
         } else if let TaskFileType::Exe = self.file_type {
-            let tid = self.tid;
-            let task_list = TASK_LIST.lock_save_irq();
-            let id = task_list
-                .iter()
-                .find(|(desc, _)| desc.tid() == tid)
-                .map(|(desc, _)| *desc);
-            drop(task_list);
-            let task_details = if let Some(desc) = id {
-                find_task_by_descriptor(&desc)
-            } else {
-                None
-            };
+            let task_details = find_task_by_tid(self.tid);
+
             return if let Some(task) = task_details {
                 if let Some(exe) = task.process.executable.lock_save_irq().clone() {
                     Ok(exe.as_str().to_string().into())

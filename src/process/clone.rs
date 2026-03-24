@@ -1,3 +1,4 @@
+use super::Tid;
 use super::owned::OwnedTask;
 use super::ptrace::{PTrace, TracePoint, ptrace_stop};
 use super::{
@@ -63,11 +64,19 @@ pub async fn sys_clone(
 ) -> Result<usize> {
     let flags = CloneFlags::from_bits_truncate(flags);
 
+    let trace_point = if flags.contains(CloneFlags::CLONE_THREAD) {
+        TracePoint::Clone
+    } else {
+        TracePoint::Fork
+    };
+
     // TODO: differentiate between `TracePoint::Fork`, `TracePoint::Clone` and
     // `TracePoint::VFork`.
-    let should_trace_new_tsk = ptrace_stop(ctx, TracePoint::Fork).await;
+    let should_trace_new_tsk = ptrace_stop(ctx, trace_point).await;
 
     let new_task = {
+        let tid = Tid::next_tid();
+
         let current_task = ctx.task();
 
         let mut user_ctx = *current_task.ctx.user();
@@ -80,7 +89,7 @@ pub async fn sys_clone(
             user_ctx.tpid_el0 = tls as _;
         }
 
-        let (tg, tid) = if flags.contains(CloneFlags::CLONE_THREAD) {
+        let tg = if flags.contains(CloneFlags::CLONE_THREAD) {
             if !flags.contains(CloneFlags::CLONE_SIGHAND & CloneFlags::CLONE_VM) {
                 // CLONE_THREAD requires both CLONE_SIGHAND and CLONE_VM to be
                 // set.
@@ -88,11 +97,8 @@ pub async fn sys_clone(
             }
             user_ctx.sp_el0 = newsp.value() as _;
 
-            (
-                // A new task within this thread group.
-                current_task.process.clone(),
-                current_task.process.next_tid(),
-            )
+            // A new task within this thread group.
+            current_task.process.clone()
         } else {
             let tgid_parent = if flags.contains(CloneFlags::CLONE_PARENT) {
                 // Use the parent's parent as the new parent.
@@ -109,7 +115,7 @@ pub async fn sys_clone(
                 current_task.process.clone()
             };
 
-            tgid_parent.new_child(flags.contains(CloneFlags::CLONE_SIGHAND))
+            tgid_parent.new_child(flags.contains(CloneFlags::CLONE_SIGHAND), tid)
         };
 
         let vm = if flags.contains(CloneFlags::CLONE_VM) {
@@ -191,7 +197,7 @@ pub async fn sys_clone(
 
     TASK_LIST
         .lock_save_irq()
-        .insert(desc, Arc::downgrade(&work));
+        .insert(desc.tid(), Arc::downgrade(&work));
 
     work.process
         .tasks

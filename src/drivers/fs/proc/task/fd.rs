@@ -1,6 +1,6 @@
 use crate::drivers::fs::proc::{get_inode_id, procfs};
 use crate::process::fd_table::Fd;
-use crate::process::{TaskDescriptor, find_task_by_descriptor};
+use crate::process::{Tid, find_task_by_tid};
 use crate::sched::current_work;
 use alloc::borrow::ToOwned;
 use alloc::boxed::Box;
@@ -20,12 +20,12 @@ use libkernel::fs::{
 pub struct ProcFdInode {
     id: InodeId,
     attr: FileAttr,
-    desc: TaskDescriptor,
+    tid: Tid,
     fd_info: bool,
 }
 
 impl ProcFdInode {
-    pub fn new(desc: TaskDescriptor, fd_info: bool, inode_id: InodeId) -> Self {
+    pub fn new(tid: Tid, fd_info: bool, inode_id: InodeId) -> Self {
         Self {
             id: inode_id,
             attr: FileAttr {
@@ -33,7 +33,7 @@ impl ProcFdInode {
                 // Define appropriate file attributes for fdinfo.
                 ..FileAttr::default()
             },
-            desc,
+            tid,
             fd_info,
         }
     }
@@ -63,10 +63,10 @@ impl Inode for ProcFdInode {
         let fs = procfs();
         let inode_id = InodeId::from_fsid_and_inodeid(
             fs.id(),
-            get_inode_id(&[&self.desc.tid().value().to_string(), self.dir_name(), name]),
+            get_inode_id(&[&self.tid.value().to_string(), self.dir_name(), name]),
         );
         Ok(Arc::new(ProcFdFile::new(
-            self.desc,
+            self.tid,
             self.fd_info,
             fd,
             inode_id,
@@ -74,7 +74,7 @@ impl Inode for ProcFdInode {
     }
 
     async fn readdir(&self, start_offset: u64) -> Result<Box<dyn DirStream>> {
-        let task = find_task_by_descriptor(&self.desc).ok_or(FsError::NotFound)?;
+        let task = find_task_by_tid(self.tid).ok_or(FsError::NotFound)?;
         let fd_table = task.fd_table.lock_save_irq();
         let mut entries = Vec::new();
         for fd in 0..fd_table.len() {
@@ -86,11 +86,7 @@ impl Inode for ProcFdInode {
             entries.push(Dirent {
                 id: InodeId::from_fsid_and_inodeid(
                     self.id.fs_id(),
-                    get_inode_id(&[
-                        &self.desc.tid().value().to_string(),
-                        self.dir_name(),
-                        &fd_str,
-                    ]),
+                    get_inode_id(&[&self.tid.value().to_string(), self.dir_name(), &fd_str]),
                 ),
                 offset: next_offset,
                 file_type: FileType::File,
@@ -107,13 +103,13 @@ impl Inode for ProcFdInode {
 pub struct ProcFdFile {
     id: InodeId,
     attr: FileAttr,
-    desc: TaskDescriptor,
+    tid: Tid,
     fd_info: bool,
     fd: i32,
 }
 
 impl ProcFdFile {
-    pub fn new(desc: TaskDescriptor, fd_info: bool, fd: i32, inode_id: InodeId) -> Self {
+    pub fn new(tid: Tid, fd_info: bool, fd: i32, inode_id: InodeId) -> Self {
         Self {
             id: inode_id,
             attr: FileAttr {
@@ -125,7 +121,7 @@ impl ProcFdFile {
                 // Define appropriate file attributes for fdinfo file.
                 ..FileAttr::default()
             },
-            desc,
+            tid,
             fd_info,
             fd,
         }
@@ -143,7 +139,7 @@ impl SimpleFile for ProcFdFile {
     }
 
     async fn read(&self) -> Result<Vec<u8>> {
-        let task = find_task_by_descriptor(&self.desc).ok_or(FsError::NotFound)?;
+        let task = find_task_by_tid(self.tid).ok_or(FsError::NotFound)?;
         let fd_entry = task
             .fd_table
             .lock_save_irq()
@@ -160,7 +156,7 @@ impl SimpleFile for ProcFdFile {
 
     async fn readlink(&self) -> Result<PathBuf> {
         if !self.fd_info {
-            if let Some(task) = find_task_by_descriptor(&self.desc) {
+            if let Some(task) = find_task_by_tid(self.tid) {
                 let Some(file) = task.fd_table.lock_save_irq().get(Fd(self.fd)) else {
                     return Err(FsError::NotFound.into());
                 };

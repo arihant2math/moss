@@ -2,7 +2,6 @@ use crate::{
     memory::uaccess::{
         UserCopyable, copy_from_user, copy_obj_array_from_user, copy_objs_to_user, copy_to_user,
     },
-    process::TASK_LIST,
     sched::syscall_ctx::ProcessCtx,
 };
 use libkernel::{
@@ -11,6 +10,8 @@ use libkernel::{
     proc::caps::{Capabilities, CapabilitiesFlags},
 };
 
+use super::{Tid, find_task_by_tid, thread_group::pid::PidT};
+
 const LINUX_CAPABILITY_VERSION_1: u32 = 0x19980330;
 const LINUX_CAPABILITY_VERSION_3: u32 = 0x20080522;
 
@@ -18,7 +19,7 @@ const LINUX_CAPABILITY_VERSION_3: u32 = 0x20080522;
 #[derive(Debug, Default, Clone, Copy)]
 pub struct CapUserHeader {
     version: u32,
-    pid: i32,
+    pid: PidT,
 }
 
 #[repr(C)]
@@ -59,11 +60,7 @@ pub async fn sys_capget(
     let task = if header.pid == 0 {
         ctx.shared().clone()
     } else {
-        TASK_LIST
-            .lock_save_irq()
-            .iter()
-            .find(|task| task.0.tgid.value() == header.pid as u32)
-            .and_then(|task| task.1.upgrade())
+        find_task_by_tid(Tid::from_pid_t(header.pid))
             .map(|x| (*x).clone())
             .ok_or(KernelError::NoProcess)?
     };
@@ -99,11 +96,7 @@ pub async fn sys_capset(
         ctx.shared().clone()
     } else {
         caller_caps.check_capable(CapabilitiesFlags::CAP_SETPCAP)?;
-        TASK_LIST
-            .lock_save_irq()
-            .iter()
-            .find(|task| task.0.tgid.value() == header.pid as u32)
-            .and_then(|task| task.1.upgrade())
+        find_task_by_tid(Tid::from_pid_t(header.pid))
             .map(|x| (*x).clone())
             .ok_or(KernelError::NoProcess)?
     };

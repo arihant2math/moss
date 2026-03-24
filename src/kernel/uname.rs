@@ -140,7 +140,7 @@ mod tests {
         }
 
         let datetime = parts.next().unwrap(); // "Tue Feb 20 12:34:56 UTC 2024"
-        validate_datetime(datetime)
+        validate_datetime(datetime);
     }
 
     // Test that the version string is of the format "#1 Moss SMP Tue Feb 20 12:34:56 UTC 2024"

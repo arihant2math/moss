@@ -79,7 +79,9 @@ pub fn do_exit_group(task: &Arc<Task>, exit_code: ChildState) {
 
     parent.children.lock_save_irq().remove(&process.tgid);
 
-    parent.child_notifiers.child_update(process.tgid, exit_code);
+    parent
+        .child_notifiers
+        .child_update(task.descriptor().tgid(), exit_code);
 
     parent
         .pending_signals
@@ -136,7 +138,7 @@ pub async fn sys_exit(ctx: &mut ProcessCtx, exit_code: usize) -> Result<usize> {
         .filter(|t| t.upgrade().is_some())
         .count();
 
-    TASK_LIST.lock_save_irq().remove(&task.descriptor());
+    TASK_LIST.lock_save_irq().remove(&task.descriptor().tid());
 
     if live_tasks <= 1 {
         // We are the last task. This is equivalent to an exit_group. The exit

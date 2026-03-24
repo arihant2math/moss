@@ -15,7 +15,7 @@ use alloc::{
     collections::btree_map::BTreeMap,
     sync::{Arc, Weak},
 };
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use creds::Credentials;
 use fd_table::FileDescriptorTable;
 use libkernel::{
@@ -29,6 +29,7 @@ use libkernel::{
     },
 };
 use ptrace::PTrace;
+use thread_group::pid::PidT;
 use thread_group::signal::{AtomicSigSet, SigId};
 use thread_group::{Tgid, ThreadGroup};
 
@@ -46,6 +47,9 @@ pub mod sleep;
 pub mod thread_group;
 pub mod threading;
 
+// the idle process (0) and the init process (1) are allocated manually.
+static NEXT_TID: AtomicU32 = AtomicU32::new(2);
+
 // Thread Id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Tid(pub u32);
@@ -61,6 +65,14 @@ impl Tid {
 
     fn idle_for_cpu() -> Tid {
         Self(CpuId::this().value() as _)
+    }
+
+    pub fn next_tid() -> Self {
+        Self(NEXT_TID.fetch_add(1, Ordering::Relaxed))
+    }
+
+    pub fn from_pid_t(pid: PidT) -> Self {
+        Self(pid as _)
     }
 }
 
@@ -309,20 +321,15 @@ impl Task {
     }
 }
 
-pub fn find_task_by_descriptor(descriptor: &TaskDescriptor) -> Option<Arc<Work>> {
+/// Finds a task by it's `Tid`.
+pub fn find_task_by_tid(tid: Tid) -> Option<Arc<Work>> {
     TASK_LIST
         .lock_save_irq()
-        .get(descriptor)
+        .get(&tid)
         .and_then(|x| x.upgrade())
 }
 
-/// Finds the root task for the given thread group
-pub fn find_process_by_tgid(tgid: Tgid) -> Option<Arc<Work>> {
-    find_task_by_descriptor(&TaskDescriptor::from_tgid_tid(tgid, Tid::from_tgid(tgid)))
-}
-
-pub static TASK_LIST: SpinLock<BTreeMap<TaskDescriptor, Weak<Work>>> =
-    SpinLock::new(BTreeMap::new());
+pub static TASK_LIST: SpinLock<BTreeMap<Tid, Weak<Work>>> = SpinLock::new(BTreeMap::new());
 
 unsafe impl Send for Task {}
 unsafe impl Sync for Task {}
