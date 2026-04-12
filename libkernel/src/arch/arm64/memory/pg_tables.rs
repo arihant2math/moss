@@ -1,76 +1,18 @@
 //! AArch64 page table structures, levels, and mapping logic.
 
-use core::marker::PhantomData;
-
-use super::{
-    pg_descriptors::{
-        L0Descriptor, L1Descriptor, L2Descriptor, L3Descriptor, MemoryType, PaMapper,
-        PageTableEntry, TableMapper,
-    },
-    tlb::TLBInvalidator,
-};
+use super::pg_descriptors::{L0Descriptor, L1Descriptor, L2Descriptor, L3Descriptor, MemoryType};
 use crate::{
     error::{MapError, Result},
     memory::{
         PAGE_SIZE,
         address::{TPA, TVA, VA},
-        paging::permissions::PtePermissions,
+        paging::{
+            PaMapper, PageAllocator, PageTableEntry, PageTableMapper, PgTable, PgTableArray,
+            TLBInvalidator, TableMapper, permissions::PtePermissions,
+        },
         region::{PhysMemoryRegion, VirtMemoryRegion},
     },
 };
-
-/// Number of page table descriptors that fit in a single 4 KiB page.
-pub const DESCRIPTORS_PER_PAGE: usize = PAGE_SIZE / core::mem::size_of::<u64>();
-/// Bitmask used to extract the page table index from a shifted virtual address.
-pub const LEVEL_MASK: usize = DESCRIPTORS_PER_PAGE - 1;
-
-/// Trait representing a single level of the page table hierarchy.
-///
-/// Each implementor corresponds to a specific page table level (L0, L1, L2,
-/// L3), characterized by its `SHIFT` value which determines the bits of the
-/// virtual address used to index into the table.
-///
-/// # Associated Types
-/// - `Descriptor`: The type representing an individual page table entry (PTE) at this level.
-///
-/// # Constants
-/// - `SHIFT`: The bit position to shift the virtual address to obtain the index for this level.
-///
-/// # Provided Methods
-/// - `pg_index(va: VA) -> usize`: Calculate the index into the page table for the given virtual address.
-///
-/// # Required Methods
-/// - `get_desc(&self, va: VA) -> Self::Descriptor`: Retrieve the descriptor
-///   (PTE) for the given virtual address.
-/// - `get_desc_mut(&mut self, va: VA) -> &mut Self::Descriptor`: Get a mutable
-///   reference to the descriptor, allowing updates.
-pub trait PgTable: Clone + Copy {
-    /// Bit shift used to extract the index for this page table level.
-    const SHIFT: usize;
-
-    /// The descriptor (page table entry) type for this level.
-    type Descriptor: PageTableEntry;
-
-    /// Constructs this table handle from a typed virtual pointer to its backing array.
-    fn from_ptr(ptr: TVA<PgTableArray<Self>>) -> Self;
-
-    /// Returns the raw mutable pointer to the underlying descriptor array.
-    fn to_raw_ptr(self) -> *mut u64;
-
-    /// Compute the index into this page table from a virtual address.
-    fn pg_index(va: VA) -> usize {
-        (va.value() >> Self::SHIFT) & LEVEL_MASK
-    }
-
-    /// Get the descriptor for a given virtual address.
-    fn get_desc(self, va: VA) -> Self::Descriptor;
-
-    /// Get the descriptor for a given index.
-    fn get_idx(self, idx: usize) -> Self::Descriptor;
-
-    /// Set the value of the descriptor for a particular VA.
-    fn set_desc(self, va: VA, desc: Self::Descriptor, invalidator: &dyn TLBInvalidator);
-}
 
 pub(super) trait TableMapperTable: PgTable<Descriptor: TableMapper> + Clone + Copy {
     type NextLevel: PgTable;
@@ -84,30 +26,6 @@ pub(super) trait TableMapperTable: PgTable<Descriptor: TableMapper> + Clone + Co
     fn next_table_pa(self, va: VA) -> Option<TPA<PgTableArray<Self::NextLevel>>> {
         let desc = self.get_desc(va);
         Some(TPA::from_value(desc.next_table_address()?.value()))
-    }
-}
-
-/// A page-aligned array of raw page table entries for a given table level.
-#[derive(Clone)]
-#[repr(C, align(4096))]
-pub struct PgTableArray<K: PgTable> {
-    pages: [u64; DESCRIPTORS_PER_PAGE],
-    _phantom: PhantomData<K>,
-}
-
-impl<K: PgTable> PgTableArray<K> {
-    /// Creates a zeroed page table array (all entries invalid).
-    pub const fn new() -> Self {
-        Self {
-            pages: [0; DESCRIPTORS_PER_PAGE],
-            _phantom: PhantomData,
-        }
-    }
-}
-
-impl<K: PgTable> Default for PgTableArray<K> {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -134,7 +52,7 @@ macro_rules! impl_pgtable {
             }
 
             fn get_idx(self, idx: usize) -> Self::Descriptor {
-                debug_assert!(idx < DESCRIPTORS_PER_PAGE);
+                debug_assert!(idx < Self::DESCRIPTORS_PER_PAGE);
                 let raw = unsafe { self.base.add(idx).read_volatile() };
                 Self::Descriptor::from_raw(raw)
             }
@@ -175,54 +93,6 @@ impl TableMapperTable for L2Table {
 impl_pgtable!(/// Level 3 page table (4 KiB per entry).
     L3Table, 12, L3Descriptor);
 
-/// Trait for temporarily mapping and modifying a page table located at a
-/// physical address.
-///
-/// During early boot, there are multiple mechanisms for accessing page table memory:
-/// - Identity mapping (idmap): active very early when VA = PA
-/// - Fixmap: a small, reserved region of virtual memory used to map arbitrary
-///   PAs temporarily
-/// - Page-offset (linear map/logical map): when VA = PA + offset, typically
-///   used after MMU init
-///
-/// This trait abstracts over those mechanisms by providing a unified way to
-/// safely access and mutate a page table given its physical address.
-///
-/// # Safety
-/// This function is `unsafe` because the caller must ensure:
-/// - The given physical address `pa` is valid and correctly aligned for type `T`.
-/// - The contents at that physical address represent a valid page table of type `T`.
-pub trait PageTableMapper {
-    /// Map a physical address to a usable reference of the page table, run the
-    /// closure, and unmap.
-    ///
-    /// # Safety
-    /// This function is `unsafe` because the caller must ensure:
-    /// - The given physical address `pa` is valid and correctly aligned for type `T`.
-    /// - The contents at that physical address represent a valid page table of type `T`.
-    unsafe fn with_page_table<T: PgTable, R>(
-        &mut self,
-        pa: TPA<PgTableArray<T>>,
-        f: impl FnOnce(TVA<PgTableArray<T>>) -> R,
-    ) -> Result<R>;
-}
-
-/// Trait for allocating new page tables during address space setup.
-///
-/// The page table walker uses this allocator to request fresh page tables
-/// when needed (e.g., when creating new levels in the page table hierarchy).
-///
-/// # Responsibilities
-/// - Return a valid, zeroed (or otherwise ready) page table physical address wrapped in `TPA<T>`.
-/// - Ensure the allocated page table meets the alignment and size requirements of type `T`.
-pub trait PageAllocator {
-    /// Allocate a new page table of type `T` and return its physical address.
-    ///
-    /// # Errors
-    /// Returns an error if allocation fails (e.g., out of memory).
-    fn allocate_page_table<T: PgTable>(&mut self) -> Result<TPA<PgTableArray<T>>>;
-}
-
 /// Describes the attributes of a memory range to be mapped.
 pub struct MapAttributes {
     /// The contiguous physical memory region to be mapped. Must be
@@ -231,8 +101,7 @@ pub struct MapAttributes {
     /// The target virtual memory region. Must be page-aligned and have the same
     /// size as `phys`.
     pub virt: VirtMemoryRegion,
-    /// The memory attributes (e.g., `MemoryType::Normal`, `MemoryType::Device`)
-    /// for the mapping.
+    /// The architecture-specific memory attributes for the mapping.
     pub mem_type: MemoryType,
     /// The access permissions (read/write/execute, user/kernel) for the
     /// mapping.
@@ -386,7 +255,7 @@ fn try_map_pa<L, PA, PM>(
     ctx: &mut MappingContext<PA, PM>,
 ) -> Result<Option<usize>>
 where
-    L: PgTable<Descriptor: PaMapper>,
+    L: PgTable<Descriptor: PaMapper<MemoryType = MemoryType>>,
     PA: PageAllocator,
     PM: PageTableMapper,
 {
@@ -416,7 +285,7 @@ where
             })?;
         }
 
-        Ok(Some(1 << (L::Descriptor::map_shift() - 12)))
+        Ok(Some(1 << (L::Descriptor::MAP_SHIFT - 12)))
     } else {
         Ok(None)
     }

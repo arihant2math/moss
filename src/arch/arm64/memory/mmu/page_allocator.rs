@@ -2,7 +2,7 @@ use core::marker::PhantomData;
 
 use crate::memory::page::ClaimedPage;
 use libkernel::{
-    arch::arm64::memory::pg_tables::{PageAllocator, PgTable, PgTableArray},
+    memory::paging::{PageAllocator, PgTable, PgTableArray},
     error::Result,
     memory::address::TPA,
 };

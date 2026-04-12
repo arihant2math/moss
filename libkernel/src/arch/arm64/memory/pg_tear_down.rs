@@ -1,15 +1,13 @@
 //! Utilities for tearing down and freeing page table hierarchies.
 
-use super::pg_descriptors::{PaMapper, TableMapper};
 use super::pg_tables::L0Table;
 use super::{
-    pg_tables::{
-        DESCRIPTORS_PER_PAGE, L3Table, PageTableMapper, PgTable, PgTableArray, TableMapperTable,
-    },
+    pg_tables::{L3Table, TableMapperTable},
     pg_walk::WalkContext,
 };
 use crate::error::Result;
 use crate::memory::address::{PA, TPA};
+use crate::memory::paging::{PaMapper, PageTableMapper, PgTable, PgTableArray, TableMapper};
 
 trait RecursiveTeardownWalker: PgTable + Sized {
     fn tear_down<F, PM>(
@@ -44,7 +42,7 @@ where
                 ctx.mapper.with_page_table(table_pa, |pgtable| {
                     let table = Self::from_ptr(pgtable);
 
-                    for i in cursor..DESCRIPTORS_PER_PAGE {
+                    for i in cursor..<T as PgTable>::DESCRIPTORS_PER_PAGE {
                         let desc = table.get_idx(i);
 
                         if let Some(addr) = desc.next_table_address() {
@@ -91,7 +89,7 @@ impl RecursiveTeardownWalker for L3Table {
             ctx.mapper.with_page_table(table_pa, |pgtable| {
                 let table = L3Table::from_ptr(pgtable);
 
-                for idx in 0..DESCRIPTORS_PER_PAGE {
+                for idx in 0..Self::DESCRIPTORS_PER_PAGE {
                     let desc = table.get_idx(idx);
 
                     if let Some(addr) = desc.mapped_address() {

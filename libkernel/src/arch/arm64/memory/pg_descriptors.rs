@@ -7,51 +7,8 @@ use tock_registers::{register_bitfields, registers::InMemoryRegister};
 use crate::memory::PAGE_SHIFT;
 use crate::memory::address::{PA, VA};
 use crate::memory::paging::permissions::PtePermissions;
+use crate::memory::paging::{PaMapper, PageTableEntry, TableMapper};
 use crate::memory::region::PhysMemoryRegion;
-
-/// Trait for common behavior across different types of page table entries.
-pub trait PageTableEntry: Sized + Copy + Clone {
-    /// Returns `true` if the entry is valid (i.e., not an Invalid/Fault entry).
-    fn is_valid(self) -> bool;
-
-    /// Returns the raw value of this page descriptor.
-    fn as_raw(self) -> u64;
-
-    /// Returns a representation of the page descriptor from a raw value.
-    fn from_raw(v: u64) -> Self;
-
-    /// Return a new invalid page descriptor.
-    fn invalid() -> Self;
-}
-
-/// Trait for descriptors that can point to a next-level table.
-pub trait TableMapper: PageTableEntry {
-    /// Returns the physical address of the next-level table, if this descriptor
-    /// is a table descriptor.
-    fn next_table_address(self) -> Option<PA>;
-
-    /// Creates a new descriptor that points to the given next-level table.
-    fn new_next_table(pa: PA) -> Self;
-}
-
-/// A descriptor that maps a physical address (L1, L2 blocks and L3 page).
-pub trait PaMapper: PageTableEntry {
-    /// A type that encodes different types of memory for this architecture.
-    type MemoryType;
-
-    /// Constructs a new valid page descriptor that maps a physical address.
-    fn new_map_pa(page_address: PA, memory_type: MemoryType, perms: PtePermissions) -> Self;
-
-    /// Return how many bytes this descriptor type maps.
-    fn map_shift() -> usize;
-
-    /// Whether a subsection of the region could be mapped via this type of
-    /// page.
-    fn could_map(region: PhysMemoryRegion, va: VA) -> bool;
-
-    /// Return the mapped physical address.
-    fn mapped_address(self) -> Option<PA>;
-}
 
 #[derive(Clone, Copy)]
 struct TableAddr(PA);
@@ -95,10 +52,12 @@ macro_rules! define_descriptor {
         pub struct $name(u64);
 
         impl PageTableEntry for $name {
+            type RawDescriptor = u64;
+            const INVALID: u64 = 0;
+
             fn is_valid(self) -> bool { (self.0 & 0b11) != 0 }
-            fn as_raw(self) -> u64 { self.0 }
-            fn from_raw(v: u64) -> Self { Self(v) }
-            fn invalid() -> Self { Self(0) }
+            fn as_raw(self) -> Self::RawDescriptor { self.0 }
+            fn from_raw(v: Self::RawDescriptor) -> Self { Self(v) }
         }
 
         $(
@@ -204,8 +163,7 @@ macro_rules! define_descriptor {
 
             impl PaMapper for $name {
                 type MemoryType = MemoryType;
-
-                fn map_shift() -> usize { $tbl_shift }
+                const MAP_SHIFT: usize = $tbl_shift;
 
                 fn could_map(region: PhysMemoryRegion, va: VA) -> bool {
                     let is_aligned = |addr: usize| (addr & ((1 << $tbl_shift) - 1)) == 0;

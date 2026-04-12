@@ -6,17 +6,14 @@ use core::{
 };
 use libkernel::{
     arch::arm64::memory::{
-        pg_descriptors::{
-            L0Descriptor, L1Descriptor, L2Descriptor, L3Descriptor, MemoryType, PaMapper,
-            PageTableEntry, TableMapper,
-        },
-        pg_tables::{L0Table, L1Table, L2Table, L3Table, PgTable, PgTableArray},
+        pg_descriptors::{L0Descriptor, L1Descriptor, L2Descriptor, L3Descriptor, MemoryType},
+        pg_tables::{L0Table, L1Table, L2Table, L3Table},
     },
     error::{KernelError, Result},
     memory::{
         PAGE_SIZE,
         address::{IdentityTranslator, TPA, TVA, VA},
-        paging::permissions::PtePermissions,
+        paging::{PaMapper, PageTableEntry, PgTable, PgTableArray, TableMapper, permissions::PtePermissions},
         region::PhysMemoryRegion,
     },
 };

@@ -9,14 +9,14 @@ use libkernel::{
     arch::arm64::memory::{
         pg_descriptors::MemoryType,
         pg_tables::{
-            L0Table, MapAttributes, MappingContext, PageTableMapper, PgTable, PgTableArray,
+            L0Table, MapAttributes, MappingContext,
             map_range,
         },
     },
     error::Result,
     memory::{
         address::{TPA, TVA},
-        paging::permissions::PtePermissions,
+        paging::{PageTableMapper, PgTable, PgTableArray, permissions::PtePermissions},
     },
 };
 

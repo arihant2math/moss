@@ -1,15 +1,18 @@
 //! Page table walking and per-entry modification.
 
 use super::{
-    pg_descriptors::{L3Descriptor, PageTableEntry, TableMapper},
-    pg_tables::{L0Table, L3Table, PageTableMapper, PgTable, PgTableArray, TableMapperTable},
-    tlb::{NullTlbInvalidator, TLBInvalidator},
+    pg_descriptors::L3Descriptor,
+    pg_tables::{L0Table, L3Table, TableMapperTable},
+    tlb::NullTlbInvalidator,
 };
 use crate::{
     error::{MapError, Result},
     memory::{
         PAGE_SIZE,
         address::{TPA, VA},
+        paging::{
+            PageTableEntry, PageTableMapper, PgTable, PgTableArray, TLBInvalidator, TableMapper,
+        },
         region::VirtMemoryRegion,
     },
 };
@@ -183,12 +186,13 @@ pub fn get_pte<PM: PageTableMapper>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arch::arm64::memory::pg_descriptors::{L2Descriptor, MemoryType, PaMapper};
+    use crate::arch::arm64::memory::pg_descriptors::{L2Descriptor, MemoryType};
     use crate::arch::arm64::memory::pg_tables::tests::TestHarness;
     use crate::arch::arm64::memory::pg_tables::{L1Table, L2Table, map_at_level};
     use crate::error::KernelError;
     use crate::memory::PAGE_SIZE;
     use crate::memory::address::{PA, VA};
+    use crate::memory::paging::PaMapper;
     use crate::memory::paging::permissions::PtePermissions;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
