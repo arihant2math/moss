@@ -32,6 +32,7 @@ use crate::{
     sync::{Mutex, OnceLock},
 };
 
+#[expect(unused)]
 pub const IN_ACCESS: u32 = 0x0000_0001;
 pub const IN_MODIFY: u32 = 0x0000_0002;
 pub const IN_ATTRIB: u32 = 0x0000_0004;
