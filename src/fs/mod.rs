@@ -28,6 +28,7 @@ use reg::RegFile;
 pub mod blk;
 pub mod dir;
 pub mod fops;
+pub mod memfd;
 pub mod open_file;
 pub mod path_file;
 pub mod pipe;
