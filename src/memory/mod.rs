@@ -16,6 +16,7 @@ pub mod mincore;
 pub mod mmap;
 pub mod page;
 pub mod process_vm;
+pub mod shared_anon;
 pub mod uaccess;
 
 pub type PageOffsetTranslator =

@@ -1,17 +1,21 @@
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::{process::fd_table::Fd, sched::syscall_ctx::ProcessCtx};
+use crate::{
+    memory::shared_anon::SharedAnon, process::fd_table::Fd, sched::syscall_ctx::ProcessCtx,
+};
 use alloc::{
     string::{String, ToString},
+    sync::Arc,
     vec::Vec,
 };
 use libkernel::{
     error::{KernelError, Result},
     memory::{
         address::VA,
+        page::PageFrame,
         proc_vm::{
             memory_map::{AddressRequest, RemapDestination},
-            vmarea::{VMAPermissions, VMAreaKind},
+            vmarea::{VMAPermissions, VMAreaKind, VMSharedMapping},
         },
         region::VirtMemoryRegion,
     },
@@ -65,13 +69,15 @@ pub async fn sys_mmap(
         return Err(KernelError::InvalidValue);
     }
 
-    // Ensure mapping sharability has been specified:
-    if (flags & (MAP_SHARED | MAP_PRIVATE)) == 0 {
+    let mapping_kind = flags & (MAP_SHARED | MAP_PRIVATE);
+    if mapping_kind == 0 || mapping_kind == (MAP_SHARED | MAP_PRIVATE) {
         return Err(KernelError::InvalidValue);
     }
 
-    // TODO: Shared Mappings.
-    if (flags & MAP_SHARED) != 0 {
+    let is_shared = (flags & MAP_SHARED) != 0;
+    let is_anon = (flags & (MAP_ANON | MAP_ANONYMOUS)) != 0;
+
+    if is_shared && !is_anon {
         return Err(KernelError::NotSupported);
     }
 
@@ -94,8 +100,16 @@ pub async fn sys_mmap(
 
     let requested_len = len as usize;
 
-    let (kind, name) = if (flags & (MAP_ANON | MAP_ANONYMOUS)) != 0 {
-        (VMAreaKind::Anon, String::new())
+    let (kind, name) = if is_anon {
+        if offset != 0 {
+            return Err(KernelError::InvalidValue);
+        }
+        let kind = if is_shared {
+            VMAreaKind::SharedAnon(VMSharedMapping::new(Arc::new(SharedAnon::new())))
+        } else {
+            VMAreaKind::Anon
+        };
+        (kind, String::new())
     } else {
         // File-backed mapping: require a valid fd and use the provided offset.
         let fd = ctx
@@ -135,30 +149,30 @@ pub async fn sys_mmap(
 
     // Lock the task and call the core memory manager to perform the mapping.
     let proc_vm = ctx.shared().vm.shared_vm();
-    let new_mapping_addr = proc_vm.lock_save_irq().mm_mut().mmap(
+    let (new_mapping_addr, pages) = proc_vm.lock_save_irq().mm_mut().mmap_replacing(
         address_request,
         requested_len,
         permissions,
         kind,
         name,
     )?;
+    free_unmapped_pages(pages)?;
 
     Ok(new_mapping_addr.value())
 }
 
-fn free_unmapped_pages(pages: Vec<libkernel::memory::page::PageFrame>) -> Result<()> {
+fn free_unmapped_pages(pages: Vec<PageFrame>) -> Result<()> {
     if pages.is_empty() {
         return Ok(());
     }
 
-    // The frames returned by unmap/mremap are no longer mapped and belong to this process;
-    // creating temporary allocations from these regions allows the allocator to reclaim them on drop.
+    // Each unmapped frame owns one reference, even if other processes share it.
     let allocator = crate::memory::PAGE_ALLOC
         .get()
         .ok_or(KernelError::NoMemory)?;
 
-    // Create a temporary allocation from the single-page region and drop it immediately to free.
     for p in pages {
+        // SAFETY: unmapping transfers this page-table reference to us.
         let tmp = unsafe { allocator.alloc_from_region(p.as_phys_range()) };
         drop(tmp);
     }
@@ -170,9 +184,7 @@ pub async fn sys_munmap(ctx: &ProcessCtx, addr: VA, len: usize) -> Result<usize>
     let region = VirtMemoryRegion::new(addr, len);
     let proc_vm = ctx.shared().vm.shared_vm();
     let pages = proc_vm.lock_save_irq().mm_mut().munmap(region)?;
-
     free_unmapped_pages(pages)?;
-
     Ok(0)
 }
 
