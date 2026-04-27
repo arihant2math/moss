@@ -87,6 +87,26 @@ pub fn sys_tkill(ctx: &ProcessCtx, tid: PidT, signal: UserSigId) -> Result<usize
     Ok(0)
 }
 
+pub fn sys_tgkill(_ctx: &ProcessCtx, tgid: PidT, tid: PidT, signal: UserSigId) -> Result<usize> {
+    if tgid <= 0 || tid <= 0 {
+        return Err(KernelError::InvalidValue);
+    }
+
+    let signal: SigId = signal.try_into()?;
+    let target_tg = ThreadGroup::get(Tgid(tgid as _)).ok_or(KernelError::NoProcess)?;
+    let target_tid = Tid(tid as _);
+
+    let task = target_tg
+        .tasks
+        .lock_save_irq()
+        .get(&target_tid)
+        .and_then(|t| t.upgrade())
+        .ok_or(KernelError::NoProcess)?;
+
+    task.process.queue_signal(signal);
+    Ok(0)
+}
+
 pub fn send_signal_to_pg(pgid: Pgid, signal: SigId) {
     for tg_weak in TG_LIST.lock_save_irq().values() {
         if let Some(tg) = tg_weak.upgrade()
