@@ -97,7 +97,7 @@ use crate::{
             pid::{sys_getpgid, sys_getpid, sys_getppid, sys_setpgid},
             rsrc_lim::sys_prlimit64,
             signal::{
-                kill::{sys_kill, sys_tkill},
+                kill::{sys_kill, sys_tgkill, sys_tkill},
                 sigaction::sys_rt_sigaction,
                 sigaltstack::sys_sigaltstack,
                 signalfd::sys_signalfd4,
@@ -575,6 +575,7 @@ pub async fn handle_syscall(mut ctx: ProcessCtx) {
         0x7c => sys_sched_yield(),
         0x81 => sys_kill(&ctx, arg1 as _, arg2.into()),
         0x82 => sys_tkill(&ctx, arg1 as _, arg2.into()),
+        0x83 => sys_tgkill(&ctx, arg1 as _, arg2 as _, arg3.into()),
         0x84 => sys_sigaltstack(&ctx, TUA::from_value(arg1 as _), TUA::from_value(arg2 as _)).await,
         0x86 => {
             sys_rt_sigaction(
