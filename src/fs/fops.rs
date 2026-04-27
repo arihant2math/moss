@@ -155,4 +155,8 @@ pub trait FileOps: Send + Sync {
     fn as_inotify(&mut self) -> Option<&mut crate::process::inotify::Inotify> {
         None
     }
+
+    fn as_timerfd(&mut self) -> Option<&mut crate::clock::syscalls::timerfd::TimerFd> {
+        None
+    }
 }

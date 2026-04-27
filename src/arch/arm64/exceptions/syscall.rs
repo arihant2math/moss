@@ -5,6 +5,7 @@ use crate::{
         itimer::{sys_getitimer, sys_setitimer},
         settime::sys_clock_settime,
         timeofday::{sys_gettimeofday, sys_settimeofday},
+        timerfd::{sys_timerfd_create, sys_timerfd_gettime, sys_timerfd_settime},
     },
     fs::{
         dir::sys_getdents64,
@@ -462,6 +463,18 @@ pub async fn handle_syscall(mut ctx: ProcessCtx) {
         0x51 => sys_sync(&ctx).await,
         0x52 => sys_fsync(&ctx, arg1.into()).await,
         0x53 => sys_fdatasync(&ctx, arg1.into()).await,
+        0x55 => sys_timerfd_create(&ctx, arg1 as _, arg2 as _).await,
+        0x56 => {
+            sys_timerfd_settime(
+                &ctx,
+                arg1.into(),
+                arg2 as _,
+                TUA::from_value(arg3 as _),
+                TUA::from_value(arg4 as _),
+            )
+            .await
+        }
+        0x57 => sys_timerfd_gettime(&ctx, arg1.into(), TUA::from_value(arg2 as _)).await,
         0x58 => {
             sys_utimensat(
                 &ctx,
