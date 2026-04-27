@@ -46,6 +46,7 @@ pub const ENAMETOOLONG: isize = -36;
 pub const ENOSYS: isize = -38;
 pub const ENOTEMPTY: isize = -39;
 pub const ELOOP: isize = -40;
+pub const ECANCELED: isize = -125;
 pub const EAFNOSUPPORT: isize = -97;
 pub const EOPNOTSUPP: isize = -95;
 pub const ETIMEDOUT: isize = -110;
@@ -80,6 +81,7 @@ pub fn kern_err_to_syscall(err: KernelError) -> isize {
         KernelError::NoChildProcess => ECHILD,
         KernelError::OpNotSupported => EOPNOTSUPP,
         KernelError::Interrupted => EINTR,
+        KernelError::Canceled => ECANCELED,
         KernelError::NoProcess => ESRCH,
         KernelError::AddressFamilyNotSupported => EAFNOSUPPORT,
         e => todo!("{e}"),

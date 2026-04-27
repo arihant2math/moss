@@ -3,6 +3,7 @@ pub mod syscalls;
 pub mod timer;
 pub mod timespec;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClockId {
     Realtime = 0,
     Monotonic = 1,

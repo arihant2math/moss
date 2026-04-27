@@ -285,6 +285,10 @@ pub enum KernelError {
     #[error("Interrupted system call")]
     Interrupted,
 
+    /// Operation canceled.
+    #[error("Operation canceled")]
+    Canceled,
+
     /// Name too long.
     #[error("Name too long")]
     NameTooLong,
