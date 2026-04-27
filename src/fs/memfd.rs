@@ -9,7 +9,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use async_trait::async_trait;
 use core::ffi::c_char;
-use libkernel::fs::OpenFlags;
+use libkernel::fs::{OpenFlags, SeekFrom};
 use libkernel::memory::address::{TUA, UA};
 
 pub struct MemFd {
@@ -69,6 +69,25 @@ impl FileOps for MemFd {
         let mut data = self.data.lock().await;
         data.resize(new_size, 0);
         Ok(())
+    }
+
+    async fn seek(&mut self, ctx: &mut FileCtx, pos: SeekFrom) -> libkernel::error::Result<u64> {
+        fn saturating_add_signed(u: u64, i: i64) -> u64 {
+            if i >= 0 {
+                u.saturating_add(i as u64)
+            } else {
+                u.saturating_sub((-i) as u64)
+            }
+        }
+
+        let size = self.data.lock().await.len() as u64;
+        ctx.pos = match pos {
+            SeekFrom::Start(x) => x,
+            SeekFrom::End(x) => saturating_add_signed(size, x),
+            SeekFrom::Current(x) => saturating_add_signed(ctx.pos, x),
+        };
+
+        Ok(ctx.pos)
     }
 }
 
