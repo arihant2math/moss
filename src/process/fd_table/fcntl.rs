@@ -12,6 +12,8 @@ const F_GETFL: u32 = 3; // Get file status flags.
 const F_SETFL: u32 = 4; // Set file status flags.
 const F_LINUX_SPECIFIC_BASE: u32 = 1024;
 const F_DUPFD_CLOEXEC: u32 = F_LINUX_SPECIFIC_BASE + 6; // Duplicate file descriptor with FD_CLOEXEC.
+const F_ADD_SEALS: u32 = F_LINUX_SPECIFIC_BASE + 9; // Add seals to an anonymous file.
+const F_GET_SEALS: u32 = F_LINUX_SPECIFIC_BASE + 10; // Get seals on an anonymous file.
 
 pub async fn sys_fcntl(ctx: &ProcessCtx, fd: Fd, op: u32, arg: usize) -> Result<usize> {
     let task = ctx.shared();
@@ -80,6 +82,20 @@ pub async fn sys_fcntl(ctx: &ProcessCtx, fd: Fd, op: u32, arg: usize) -> Result<
             };
             // TODO: Ignore sync/dsync when implemented
             open_fd.set_flags(fl).await;
+            Ok(0)
+        }
+        F_ADD_SEALS => {
+            task.fd_table
+                .lock_save_irq()
+                .get(fd)
+                .ok_or(KernelError::BadFd)?;
+            Ok(0)
+        }
+        F_GET_SEALS => {
+            task.fd_table
+                .lock_save_irq()
+                .get(fd)
+                .ok_or(KernelError::BadFd)?;
             Ok(0)
         }
         _ => Err(KernelError::InvalidValue),
