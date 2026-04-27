@@ -55,8 +55,16 @@ bitflags::bitflags! {
 #[derive(Clone, Copy, Debug)]
 pub struct SigInfo {
     pub signo: i32,
-    pub code: i32,
     pub errno: i32,
+    pub code: i32,
+    _pad0: i32,
+    pub pid: i32,
+    pub uid: u32,
+    pub status: i32,
+    _pad1: i32,
+    pub utime: i64,
+    pub stime: i64,
+    _rest: [u8; 80],
 }
 
 unsafe impl UserCopyable for SigInfo {}
@@ -412,13 +420,12 @@ pub async fn sys_waitid(
     let child_proc_count = task.process.children.lock_save_irq().iter().count();
 
     // Try immediate check if no children or WNOHANG
-    let event = if child_proc_count == 0 || flags.contains(WaitFlags::WNOHANG) {
-        let mut ret: Option<WaitEvent> = None;
+    let (ret_pid, event) = if child_proc_count == 0 || flags.contains(WaitFlags::WNOHANG) {
+        let mut ret: Option<(PidT, WaitEvent)> = None;
 
         task.process.child_notifiers.inner.update(|s| {
             // Don't consume on WNOWAIT.
-            ret = find_event(s, sel_pid, flags, !flags.contains(WaitFlags::WNOWAIT))
-                .map(|(_, event)| event);
+            ret = find_event(s, sel_pid, flags, !flags.contains(WaitFlags::WNOWAIT));
             WakeupType::None
         });
 
@@ -437,32 +444,39 @@ pub async fn sys_waitid(
                 find_event(s, sel_pid, flags, !flags.contains(WaitFlags::WNOWAIT))
             })
             .await
-            .1
     };
 
     // Populate siginfo
     if !infop.is_null() {
         let mut siginfo = SigInfo {
             signo: SigId::SIGCHLD.user_id() as i32,
-            code: 0,
             errno: 0,
+            code: 0,
+            _pad0: 0,
+            pid: ret_pid,
+            uid: 0,
+            status: 0,
+            _pad1: 0,
+            utime: 0,
+            stime: 0,
+            _rest: [0; 80],
         };
         match event {
             WaitEvent::Child(ChildState::NormalExit { code }) => {
                 siginfo.code = CLD_EXITED;
-                siginfo.errno = code as i32;
+                siginfo.status = code as i32;
             }
             WaitEvent::Child(ChildState::SignalExit { signal, core }) => {
                 siginfo.code = if core { CLD_DUMPED } else { CLD_KILLED };
-                siginfo.errno = signal.user_id() as i32;
+                siginfo.status = signal.user_id() as i32;
             }
             WaitEvent::Child(ChildState::Stop { signal }) => {
                 siginfo.code = CLD_STOPPED;
-                siginfo.errno = signal.user_id() as i32;
+                siginfo.status = signal.user_id() as i32;
             }
             WaitEvent::Ptrace(TraceTrap { signal, .. }) => {
                 siginfo.code = CLD_TRAPPED;
-                siginfo.errno = signal.user_id() as i32;
+                siginfo.status = signal.user_id() as i32;
             }
             WaitEvent::Child(ChildState::Continue) => {
                 siginfo.code = CLD_CONTINUED;
