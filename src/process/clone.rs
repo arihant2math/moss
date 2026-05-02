@@ -3,7 +3,7 @@ use super::ptrace::{PTrace, TracePoint, ptrace_stop};
 use super::{ITimers, Tid};
 use super::{
     ctx::Context,
-    thread_group::signal::{AtomicSigSet, SigSet},
+    thread_group::signal::{AtomicSigSet, PendingSignals, SigSet},
 };
 use crate::memory::uaccess::copy_to_user;
 use crate::sched::sched_task::Work;
@@ -159,9 +159,9 @@ pub async fn sys_clone(
             // When we want to trace a new task through one of
             // PTRACE_O_TRACE{FORK,VFORK,CLONE}, stop the child as soon as
             // it is created.
-            AtomicSigSet::new(SigSet::SIGSTOP)
+            PendingSignals::from_set(SigSet::SIGSTOP)
         } else {
-            AtomicSigSet::empty()
+            PendingSignals::empty()
         };
 
         OwnedTask {
@@ -185,7 +185,7 @@ pub async fn sys_clone(
                 creds: SpinLock::new(creds),
                 ptrace: SpinLock::new(ptrace),
                 sig_mask: new_sigmask,
-                pending_signals: initial_signals,
+                pending_signals: SpinLock::new(initial_signals),
                 signal_notifier: SpinLock::new(WakerSet::new()),
                 utime: AtomicUsize::new(0),
                 stime: AtomicUsize::new(0),

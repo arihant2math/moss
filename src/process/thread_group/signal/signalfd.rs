@@ -1,4 +1,4 @@
-use super::{SigId, SigSet};
+use super::{PendingSignal, SigSet};
 use crate::fs::fops::FileOps;
 use crate::fs::open_file::{FileCtx, OpenFile};
 use crate::memory::uaccess::{copy_from_user, copy_to_user};
@@ -81,21 +81,27 @@ impl SignalFd {
         SigSet::from_bits_truncate(!self.mask.bits())
     }
 
-    fn take_pending_signal_for(task: &Work, blocked: SigSet) -> Option<SigId> {
-        task.pending_signals.take_signal(blocked).or_else(|| {
-            task.process
-                .pending_signals
-                .lock_save_irq()
-                .take_signal(blocked)
-        })
+    fn take_pending_signal_for(task: &Work, blocked: SigSet) -> Option<PendingSignal> {
+        task.pending_signals
+            .lock_save_irq()
+            .take_signal(blocked)
+            .or_else(|| {
+                task.process
+                    .pending_signals
+                    .lock_save_irq()
+                    .take_signal(blocked)
+            })
     }
 
-    fn take_pending_signal(&self) -> Option<SigId> {
+    fn take_pending_signal(&self) -> Option<PendingSignal> {
         Self::take_pending_signal_for(&current_work(), self.blocked_mask())
     }
 
     fn has_pending_signal_for(task: &Work, blocked: SigSet) -> bool {
-        task.pending_signals.peek_signal(blocked).is_some()
+        task.pending_signals
+            .lock_save_irq()
+            .peek_signal(blocked)
+            .is_some()
             || task
                 .process
                 .pending_signals
@@ -120,7 +126,14 @@ impl SignalFd {
         loop {
             if let Some(sig) = self.take_pending_signal() {
                 let info = SignalfdSiginfo {
-                    ssi_signo: sig.user_id() as u32,
+                    ssi_signo: sig.id.user_id() as u32,
+                    ssi_errno: sig.info.errno,
+                    ssi_code: sig.info.code,
+                    ssi_pid: sig.info.pid as u32,
+                    ssi_uid: sig.info.uid,
+                    ssi_status: sig.info.sigval as i32,
+                    ssi_int: sig.info.sigval as i32,
+                    ssi_ptr: sig.info.sigval,
                     ..Default::default()
                 };
 

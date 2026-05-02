@@ -188,7 +188,8 @@ pub fn dispatch_userspace_task(frame: *mut UserCtx) {
                     continue;
                 }
 
-                while let Some(signal) = ctx.task().take_signal() {
+                while let Some(pending_signal) = ctx.task().take_signal() {
+                    let signal = pending_signal.id;
                     let mut ptrace = ctx.task().ptrace.lock_save_irq();
                     if ptrace.trace_signal(signal, ctx.task().ctx.user()) {
                         ptrace.set_waker(current_work_waker());
@@ -282,7 +283,7 @@ pub fn dispatch_userspace_task(frame: *mut UserCtx) {
                             // kernel work. Therefore there will be no
                             // concurrent accesses of the ctx.
                             let ctx2 = unsafe { ctx.clone() };
-                            let fut = ArchImpl::do_signal(ctx2, id, action);
+                            let fut = ArchImpl::do_signal(ctx2, id, pending_signal.info, action);
 
                             ctx.task_mut().ctx.put_signal_work(Box::pin(fut));
 

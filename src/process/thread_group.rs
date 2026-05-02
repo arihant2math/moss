@@ -19,7 +19,7 @@ use core::{fmt::Display, sync::atomic::Ordering};
 use libkernel::fs::pathbuf::PathBuf;
 use pid::PidT;
 use rsrc_lim::ResourceLimits;
-use signal::{SigId, SigSet, SignalActionState};
+use signal::{PendingSignal, PendingSignals, SigId, SigSet, SignalActionState};
 use wait::Notifiers;
 
 pub mod builder;
@@ -109,7 +109,7 @@ pub struct ThreadGroup {
     pub tasks: SpinLock<BTreeMap<Tid, Weak<Work>>>,
     pub signals: Arc<SpinLock<SignalActionState>>,
     pub rsrc_lim: Arc<SpinLock<ResourceLimits>>,
-    pub pending_signals: SpinLock<SigSet>,
+    pub pending_signals: SpinLock<PendingSignals>,
     pub priority: SpinLock<i8>,
     pub child_notifiers: Notifiers,
     pub utime: AtomicUsize,
@@ -165,17 +165,25 @@ impl ThreadGroup {
     }
 
     pub fn queue_signal(&self, signal: SigId) {
-        self.pending_signals.lock_save_irq().set_signal(signal);
+        self.queue_pending_signal(PendingSignal::new(signal));
+    }
+
+    pub fn queue_pending_signal(&self, signal: PendingSignal) {
+        self.pending_signals.lock_save_irq().push_signal(signal);
         self.notify_signal_waiters();
     }
 
     pub fn set_pending_signals(&self, signals: SigSet) {
-        *self.pending_signals.lock_save_irq() = signals;
+        *self.pending_signals.lock_save_irq() = PendingSignals::from_set(signals);
         self.notify_signal_waiters();
     }
 
     pub fn deliver_signal(&self, signal: SigId) {
-        match signal {
+        self.deliver_pending_signal(PendingSignal::new(signal));
+    }
+
+    pub fn deliver_pending_signal(&self, signal: PendingSignal) {
+        match signal.id {
             SigId::SIGKILL => {
                 // Set the sigkill marker in the pending signals and wake up all
                 // tasks in this group.
@@ -190,7 +198,7 @@ impl ThreadGroup {
                 }
             }
             _ => {
-                self.queue_signal(signal);
+                self.queue_pending_signal(signal);
 
                 // See whether there is a task that can action the signal.
                 for task in self.tasks.lock_save_irq().values() {

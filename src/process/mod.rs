@@ -32,7 +32,7 @@ use libkernel::{
 };
 use ptrace::PTrace;
 use thread_group::pid::PidT;
-use thread_group::signal::{AtomicSigSet, SigId};
+use thread_group::signal::{AtomicSigSet, PendingSignal, PendingSignals, SigId};
 use thread_group::{Tgid, ThreadGroup};
 
 pub mod caps;
@@ -192,7 +192,7 @@ pub struct Task {
     pub fd_table: Arc<SpinLock<FileDescriptorTable>>,
     pub ptrace: SpinLock<PTrace>,
     pub sig_mask: AtomicSigSet,
-    pub pending_signals: AtomicSigSet,
+    pub pending_signals: SpinLock<PendingSignals>,
     pub signal_notifier: SpinLock<WakerSet>,
     pub utime: AtomicUsize,
     pub stime: AtomicUsize,
@@ -214,7 +214,11 @@ impl Task {
 
     /// Raise a signal on this specific task (thread-directed).
     pub fn raise_task_signal(&self, signal: SigId) {
-        self.pending_signals.insert(signal.into());
+        self.queue_task_signal(PendingSignal::new(signal));
+    }
+
+    pub fn queue_task_signal(&self, signal: PendingSignal) {
+        self.pending_signals.lock_save_irq().push_signal(signal);
         self.notify_signal_waiters();
     }
 
@@ -226,24 +230,30 @@ impl Task {
     /// signal mask.
     pub fn peek_signal(&self) -> Option<SigId> {
         let mask = self.sig_mask.load();
-        self.pending_signals.peek_signal(mask).or_else(|| {
-            self.process
-                .pending_signals
-                .lock_save_irq()
-                .peek_signal(mask)
-        })
+        self.pending_signals
+            .lock_save_irq()
+            .peek_signal(mask)
+            .or_else(|| {
+                self.process
+                    .pending_signals
+                    .lock_save_irq()
+                    .peek_signal(mask)
+            })
     }
 
     /// Take a pending signal from this task or its process, respecting the
     /// signal mask.
-    pub fn take_signal(&self) -> Option<SigId> {
+    pub fn take_signal(&self) -> Option<PendingSignal> {
         let mask = self.sig_mask.load();
-        self.pending_signals.take_signal(mask).or_else(|| {
-            self.process
-                .pending_signals
-                .lock_save_irq()
-                .take_signal(mask)
-        })
+        self.pending_signals
+            .lock_save_irq()
+            .take_signal(mask)
+            .or_else(|| {
+                self.process
+                    .pending_signals
+                    .lock_save_irq()
+                    .take_signal(mask)
+            })
     }
 
     /// Return a new descriptor that uniquely represents this task in the

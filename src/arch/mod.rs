@@ -13,7 +13,7 @@ use crate::{
     process::{
         Task,
         owned::OwnedTask,
-        thread_group::signal::{SigId, ksigaction::UserspaceSigAction},
+        thread_group::signal::{KSigInfo, SigId, ksigaction::UserspaceSigAction},
     },
     sched::syscall_ctx::ProcessCtx,
 };
@@ -68,6 +68,7 @@ pub trait Arch: CpuOps + VirtualMemory {
     fn do_signal(
         ctx: ProcessCtx,
         sig: SigId,
+        info: KSigInfo,
         action: UserspaceSigAction,
     ) -> impl Future<Output = Result<<Self as Arch>::UserContext>>;
 

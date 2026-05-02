@@ -12,7 +12,7 @@ impl TryFrom<UserSigId> for SigId {
     type Error = KernelError;
 
     fn try_from(value: UserSigId) -> core::result::Result<Self, Self::Error> {
-        if value.0 < 1 || value.0 > 31 {
+        if value.0 < 1 || value.0 > 64 {
             Err(KernelError::InvalidValue)
         } else {
             // SAFETY: The above bounds check ensure that the value is within

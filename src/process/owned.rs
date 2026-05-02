@@ -7,7 +7,7 @@ use super::{
     thread_group::{
         Tgid,
         builder::ThreadGroupBuilder,
-        signal::{AtomicSigSet, SignalActionState},
+        signal::{AtomicSigSet, PendingSignals, SignalActionState},
     },
     threading::RobustListHead,
 };
@@ -77,7 +77,7 @@ impl OwnedTask {
             utime: AtomicUsize::new(0),
             stime: AtomicUsize::new(0),
             last_account: AtomicUsize::new(0),
-            pending_signals: AtomicSigSet::empty(),
+            pending_signals: SpinLock::new(PendingSignals::empty()),
             signal_notifier: SpinLock::new(WakerSet::new()),
             sig_mask: AtomicSigSet::empty(),
         };
@@ -109,7 +109,7 @@ impl OwnedTask {
             last_account: AtomicUsize::new(0),
             utime: AtomicUsize::new(0),
             stime: AtomicUsize::new(0),
-            pending_signals: AtomicSigSet::empty(),
+            pending_signals: SpinLock::new(PendingSignals::empty()),
             signal_notifier: SpinLock::new(WakerSet::new()),
             sig_mask: AtomicSigSet::empty(),
         };
