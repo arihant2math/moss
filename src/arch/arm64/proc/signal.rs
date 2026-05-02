@@ -3,7 +3,7 @@ use crate::{
     arch::arm64::exceptions::ExceptionState,
     memory::uaccess::{UserCopyable, copy_from_user, copy_to_user},
     process::thread_group::signal::{
-        SigId, ksigaction::UserspaceSigAction, sigaction::SigActionFlags,
+        KSigInfo, SigId, ksigaction::UserspaceSigAction, sigaction::SigActionFlags,
     },
     sched::syscall_ctx::ProcessCtx,
 };
@@ -18,6 +18,7 @@ use libkernel::{
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct RtSigFrame {
+    info: KSigInfo,
     uctx: ExceptionState,
     alt_stack_prev_addr: UA,
 }
@@ -29,6 +30,7 @@ unsafe impl UserCopyable for RtSigFrame {}
 pub async fn do_signal(
     ctx: ProcessCtx,
     id: SigId,
+    info: KSigInfo,
     sa: UserspaceSigAction,
 ) -> Result<ExceptionState> {
     let task = ctx.task();
@@ -37,6 +39,7 @@ pub async fn do_signal(
     let saved_state = *task.ctx.user();
     let mut new_state = saved_state;
     let mut frame = RtSigFrame {
+        info,
         uctx: saved_state,
         alt_stack_prev_addr: UA::null(),
     };
@@ -68,6 +71,10 @@ pub async fn do_signal(
     new_state.elr_el1 = sa.action.value() as _;
     new_state.x[30] = restorer as _;
     new_state.x[0] = id.user_id();
+    if sa.flags.contains(SigActionFlags::SA_SIGINFO) {
+        new_state.x[1] = addr.value() as _;
+        new_state.x[2] = addr.add_bytes(core::mem::size_of::<KSigInfo>()).value() as _;
+    }
 
     Ok(new_state)
 }

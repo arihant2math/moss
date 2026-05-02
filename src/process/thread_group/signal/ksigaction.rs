@@ -57,6 +57,7 @@ impl KSignalAction {
             SigId::SIGXCPU => Some(Self::Core),
             SigId::SIGXFSZ => Some(Self::Core),
             SigId::SIGWINCH => None,
+            _ => Some(Self::Term),
         }
     }
 }

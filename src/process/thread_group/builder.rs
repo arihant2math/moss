@@ -7,7 +7,7 @@ use crate::{drivers::fs::cgroup, sync::SpinLock};
 use super::{
     Pgid, ProcessState, Sid, TG_LIST, Tgid, ThreadGroup,
     rsrc_lim::ResourceLimits,
-    signal::{SigSet, SignalActionState},
+    signal::{PendingSignals, SignalActionState},
     wait::Notifiers,
 };
 
@@ -78,7 +78,7 @@ impl ThreadGroupBuilder {
             rsrc_lim: self
                 .rsrc_lim
                 .unwrap_or_else(|| Arc::new(SpinLock::new(ResourceLimits::default()))),
-            pending_signals: SpinLock::new(SigSet::empty()),
+            pending_signals: SpinLock::new(PendingSignals::empty()),
             child_notifiers: Notifiers::new(),
             priority: SpinLock::new(self.pri.unwrap_or(0)),
             utime: AtomicUsize::new(0),

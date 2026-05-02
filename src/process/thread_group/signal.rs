@@ -1,5 +1,5 @@
 use crate::{memory::uaccess::UserCopyable, process::Task, sched::current_work};
-use alloc::sync::Arc;
+use alloc::{collections::VecDeque, sync::Arc};
 use bitflags::bitflags;
 use core::{
     alloc::Layout,
@@ -54,7 +54,40 @@ bitflags! {
        const SIGWINCH   = 1 << 27;
        const SIGIO      = 1 << 28;
        const SIGPWR     = 1 << 29;
-       const SIGUNUSED  = 1 << 30;
+       const SIGUNUSED  = 1u64 << 30;
+       const SIGRTMIN   = 1u64 << 31;
+       const SIGRT2     = 1u64 << 32;
+       const SIGRT3     = 1u64 << 33;
+       const SIGRT4     = 1u64 << 34;
+       const SIGRT5     = 1u64 << 35;
+       const SIGRT6     = 1u64 << 36;
+       const SIGRT7     = 1u64 << 37;
+       const SIGRT8     = 1u64 << 38;
+       const SIGRT9     = 1u64 << 39;
+       const SIGRT10    = 1u64 << 40;
+       const SIGRT11    = 1u64 << 41;
+       const SIGRT12    = 1u64 << 42;
+       const SIGRT13    = 1u64 << 43;
+       const SIGRT14    = 1u64 << 44;
+       const SIGRT15    = 1u64 << 45;
+       const SIGRT16    = 1u64 << 46;
+       const SIGRT17    = 1u64 << 47;
+       const SIGRT18    = 1u64 << 48;
+       const SIGRT19    = 1u64 << 49;
+       const SIGRT20    = 1u64 << 50;
+       const SIGRT21    = 1u64 << 51;
+       const SIGRT22    = 1u64 << 52;
+       const SIGRT23    = 1u64 << 53;
+       const SIGRT24    = 1u64 << 54;
+       const SIGRT25    = 1u64 << 55;
+       const SIGRT26    = 1u64 << 56;
+       const SIGRT27    = 1u64 << 57;
+       const SIGRT28    = 1u64 << 58;
+       const SIGRT29    = 1u64 << 59;
+       const SIGRT30    = 1u64 << 60;
+       const SIGRT31    = 1u64 << 61;
+       const SIGRT32    = 1u64 << 62;
+       const SIGRTMAX   = 1u64 << 63;
        const UNMASKABLE_SIGNALS = Self::SIGKILL.bits() | Self::SIGSTOP.bits();
     }
 }
@@ -63,23 +96,23 @@ unsafe impl UserCopyable for SigSet {}
 
 impl From<SigId> for SigSet {
     fn from(value: SigId) -> Self {
-        Self::from_bits_retain(1 << value as u32)
+        Self::from_bits_retain(1u64 << value as u32)
     }
 }
 
 impl From<SigSet> for SigId {
     fn from(value: SigSet) -> Self {
-        debug_assert_eq!(value.iter().count(), 1);
+        debug_assert_eq!(value.bits().count_ones(), 1);
 
         let id = value.bits().trailing_zeros();
 
-        if id > 30 {
+        if id > 63 {
             panic!("Unexpected signal id {id}");
         }
 
         // SAFETY: We have performed bounds checking above to ensure the value
         // is within the enum range
-        unsafe { transmute(id) }
+        unsafe { transmute::<u32, SigId>(id) }
     }
 }
 
@@ -102,7 +135,15 @@ impl SigSet {
     /// Check whether a signal is set in this set while repseciting the signal
     /// mask, `mask`. Returns the ID of the set signal.
     pub fn peek_signal(&self, mask: SigSet) -> Option<SigId> {
-        self.difference(mask).iter().next().map(|x| x.into())
+        let pending = self.difference(mask).bits();
+        if pending == 0 {
+            return None;
+        }
+
+        let id = pending.trailing_zeros();
+        // SAFETY: `id` is a set bit in a u64-backed signal set, so it is in
+        // the valid 0..=63 range covered by `SigId`.
+        Some(unsafe { transmute::<u32, SigId>(id) })
     }
 }
 
@@ -192,11 +233,48 @@ pub enum SigId {
     SIGIO = 28,
     SIGPWR = 29,
     SIGUNUSED = 30,
+    SIGRTMIN = 31,
+    SIGRT2 = 32,
+    SIGRT3 = 33,
+    SIGRT4 = 34,
+    SIGRT5 = 35,
+    SIGRT6 = 36,
+    SIGRT7 = 37,
+    SIGRT8 = 38,
+    SIGRT9 = 39,
+    SIGRT10 = 40,
+    SIGRT11 = 41,
+    SIGRT12 = 42,
+    SIGRT13 = 43,
+    SIGRT14 = 44,
+    SIGRT15 = 45,
+    SIGRT16 = 46,
+    SIGRT17 = 47,
+    SIGRT18 = 48,
+    SIGRT19 = 49,
+    SIGRT20 = 50,
+    SIGRT21 = 51,
+    SIGRT22 = 52,
+    SIGRT23 = 53,
+    SIGRT24 = 54,
+    SIGRT25 = 55,
+    SIGRT26 = 56,
+    SIGRT27 = 57,
+    SIGRT28 = 58,
+    SIGRT29 = 59,
+    SIGRT30 = 60,
+    SIGRT31 = 61,
+    SIGRT32 = 62,
+    SIGRTMAX = 63,
 }
 
 impl SigId {
     pub fn user_id(self) -> u64 {
         self as u64 + 1
+    }
+
+    pub fn is_realtime(self) -> bool {
+        self as u32 >= Self::SIGRTMIN as u32
     }
 
     pub fn is_stopping(self) -> bool {
@@ -209,9 +287,134 @@ impl SigId {
 
 impl Display for SigId {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        if self.is_realtime() {
+            return write!(f, "SIGRT{}", self.user_id() - SigId::SIGRTMIN.user_id() + 1);
+        }
+
         let set: SigSet = (*self).into();
         let name = set.iter_names().next().unwrap().0;
         f.write_str(name)
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct KSigInfo {
+    pub signo: i32,
+    pub errno: i32,
+    pub code: i32,
+    _pad0: i32,
+    pub pid: i32,
+    pub uid: u32,
+    pub sigval: u64,
+    _rest: [u8; 96],
+}
+
+unsafe impl UserCopyable for KSigInfo {}
+
+impl KSigInfo {
+    pub fn for_signal(signal: SigId) -> Self {
+        Self {
+            signo: signal.user_id() as i32,
+            errno: 0,
+            code: 0,
+            _pad0: 0,
+            pid: 0,
+            uid: 0,
+            sigval: 0,
+            _rest: [0; 96],
+        }
+    }
+
+    pub fn signal(&self) -> Option<SigId> {
+        let signo = self.signo as u32;
+        if (1..=64).contains(&signo) {
+            // SAFETY: The range check above guarantees a valid signal id.
+            Some(unsafe { transmute::<u32, SigId>(signo - 1) })
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct PendingSignal {
+    pub id: SigId,
+    pub info: KSigInfo,
+}
+
+impl PendingSignal {
+    pub fn new(id: SigId) -> Self {
+        Self {
+            id,
+            info: KSigInfo::for_signal(id),
+        }
+    }
+
+    pub fn with_info(id: SigId, mut info: KSigInfo) -> Self {
+        info.signo = id.user_id() as i32;
+        Self { id, info }
+    }
+}
+
+pub struct PendingSignals {
+    set: SigSet,
+    queue: VecDeque<PendingSignal>,
+}
+
+impl PendingSignals {
+    pub fn empty() -> Self {
+        Self {
+            set: SigSet::empty(),
+            queue: VecDeque::new(),
+        }
+    }
+
+    pub fn from_set(set: SigSet) -> Self {
+        Self {
+            set,
+            queue: VecDeque::new(),
+        }
+    }
+
+    pub fn set(&self) -> SigSet {
+        self.set
+    }
+
+    pub fn set_signal(&mut self, signal: SigId) {
+        self.push_signal(PendingSignal::new(signal));
+    }
+
+    pub fn push_signal(&mut self, signal: PendingSignal) {
+        if !signal.id.is_realtime() && self.set.contains(signal.id.into()) {
+            return;
+        }
+
+        self.set.insert(signal.id.into());
+        self.queue.push_back(signal);
+    }
+
+    pub fn peek_signal(&self, mask: SigSet) -> Option<SigId> {
+        self.set.peek_signal(mask)
+    }
+
+    pub fn take_signal(&mut self, mask: SigSet) -> Option<PendingSignal> {
+        let id = self.peek_signal(mask)?;
+
+        let queued = self
+            .queue
+            .iter()
+            .position(|signal| signal.id == id)
+            .and_then(|idx| self.queue.remove(idx))
+            .unwrap_or_else(|| PendingSignal::new(id));
+
+        if id.is_realtime() && self.queue.iter().any(|signal| signal.id == id) {
+            self.set.insert(id.into());
+        } else {
+            self.set.remove(id.into());
+        }
+
+        Some(queued)
     }
 }
 

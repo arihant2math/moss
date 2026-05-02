@@ -97,7 +97,10 @@ use crate::{
             pid::{sys_getpgid, sys_getpid, sys_getppid, sys_setpgid},
             rsrc_lim::sys_prlimit64,
             signal::{
-                kill::{sys_kill, sys_tgkill, sys_tkill},
+                kill::{
+                    sys_kill, sys_rt_sigpending, sys_rt_sigqueueinfo, sys_rt_sigtimedwait,
+                    sys_rt_tgsigqueueinfo, sys_tgkill, sys_tkill,
+                },
                 sigaction::sys_rt_sigaction,
                 sigaltstack::sys_sigaltstack,
                 signalfd::sys_signalfd4,
@@ -597,6 +600,17 @@ pub async fn handle_syscall(mut ctx: ProcessCtx) {
             )
             .await
         }
+        0x88 => sys_rt_sigpending(TUA::from_value(arg1 as _), arg2 as _).await,
+        0x89 => {
+            sys_rt_sigtimedwait(
+                TUA::from_value(arg1 as _),
+                TUA::from_value(arg2 as _),
+                TUA::from_value(arg3 as _),
+                arg4 as _,
+            )
+            .await
+        }
+        0x8a => sys_rt_sigqueueinfo(&ctx, arg1 as _, arg2.into(), TUA::from_value(arg3 as _)).await,
         0x8b => {
             // Special case for sys_rt_sigreturn
             //
@@ -725,6 +739,16 @@ pub async fn handle_syscall(mut ctx: ProcessCtx) {
         0xe2 => sys_mprotect(&ctx, VA::from_value(arg1 as _), arg2 as _, arg3 as _),
         0xe8 => sys_mincore(&ctx, arg1, arg2 as _, TUA::from_value(arg3 as _)).await,
         0xe9 => Ok(0), // sys_madvise is a no-op
+        0xf0 => {
+            sys_rt_tgsigqueueinfo(
+                &ctx,
+                arg1 as _,
+                arg2 as _,
+                arg3.into(),
+                TUA::from_value(arg4 as _),
+            )
+            .await
+        }
         0xf2 => {
             sys_accept4(
                 &ctx,

@@ -28,7 +28,7 @@ use crate::{
     process::{
         Task,
         owned::OwnedTask,
-        thread_group::signal::{SigId, ksigaction::UserspaceSigAction},
+        thread_group::signal::{KSigInfo, SigId, ksigaction::UserspaceSigAction},
     },
     sched::syscall_ctx::ProcessCtx,
     sync::SpinLock,
@@ -110,9 +110,10 @@ impl Arch for Aarch64 {
     fn do_signal(
         ctx: ProcessCtx,
         sig: SigId,
+        info: KSigInfo,
         action: UserspaceSigAction,
     ) -> impl Future<Output = Result<<Self as Arch>::UserContext>> {
-        proc::signal::do_signal(ctx, sig, action)
+        proc::signal::do_signal(ctx, sig, info, action)
     }
 
     fn do_signal_return(
