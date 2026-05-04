@@ -316,11 +316,11 @@ impl Inode for CgroupDirInode {
         let child = children.get(name).cloned().ok_or(FsError::NotFound)?;
 
         if !child.children.lock_save_irq().is_empty() {
-            return Err(FsError::DirectoryNotEmpty.into());
+            return Err(FsError::Busy.into());
         }
 
         if cgroupfs().has_live_processes_direct(&child) {
-            return Err(FsError::DirectoryNotEmpty.into());
+            return Err(FsError::Busy.into());
         }
 
         children.remove(name);
@@ -612,7 +612,7 @@ impl CgroupFs {
     fn new() -> Arc<Self> {
         Arc::new(Self {
             root: CgroupDirInode::new_root(),
-            next_inode_id: AtomicU64::new(2),
+            next_inode_id: AtomicU64::new(2 << 8),
             memberships: SpinLock::new(BTreeMap::new()),
         })
     }
@@ -620,7 +620,7 @@ impl CgroupFs {
     fn alloc_inode_id(&self) -> InodeId {
         InodeId::from_fsid_and_inodeid(
             CGROUPFS_ID,
-            self.next_inode_id.fetch_add(1, Ordering::SeqCst),
+            self.next_inode_id.fetch_add(1 << 8, Ordering::Relaxed),
         )
     }
 

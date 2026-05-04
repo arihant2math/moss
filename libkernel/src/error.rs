@@ -121,6 +121,10 @@ pub enum FsError {
     #[error("The directory is not empty.")]
     DirectoryNotEmpty,
 
+    /// The device or resource is busy.
+    #[error("The device or resource is busy.")]
+    Busy,
+
     /// Invalid input parameters.
     #[error("Invalid input parameters.")]
     InvalidInput,
