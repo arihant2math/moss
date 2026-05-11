@@ -1,11 +1,12 @@
 use crate::clock::realtime::date;
 use crate::{
-    drivers::{DM, Driver},
+    drivers::{DM, Driver, block::get_block_device_by_descriptor},
     process::Task,
     sync::SpinLock,
 };
 use alloc::{borrow::ToOwned, boxed::Box, collections::btree_map::BTreeMap, sync::Arc, vec::Vec};
 use async_trait::async_trait;
+use blk::BlockFile;
 use core::any::Any;
 use core::sync::atomic::{AtomicU64, Ordering};
 use dir::DirFile;
@@ -20,6 +21,7 @@ use libkernel::{
 use open_file::OpenFile;
 use reg::RegFile;
 
+pub mod blk;
 pub mod dir;
 pub mod fops;
 pub mod open_file;
@@ -427,7 +429,15 @@ impl VFS {
                 Ok(Arc::new(open_file))
             }
             FileType::Symlink => unimplemented!(), // this is implemented at resolve_path_internal
-            FileType::BlockDevice(_) => todo!(),
+            FileType::BlockDevice(block_dev_descriptor) => {
+                let (_, block_device) = get_block_device_by_descriptor(block_dev_descriptor)
+                    .ok_or(FsError::NoDevice)?;
+
+                let mut open_file = OpenFile::new(Box::new(BlockFile::new(block_device)), flags);
+                open_file.update(target_inode, path.to_owned());
+
+                Ok(Arc::new(open_file))
+            }
             FileType::CharDevice(char_dev_descriptor) => {
                 let char_driver = DM
                     .lock_save_irq()
