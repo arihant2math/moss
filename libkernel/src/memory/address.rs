@@ -57,16 +57,22 @@ pub struct Virtual;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Physical;
 
+/// Marker for a physical guest memory address type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct GuestPhysical;
+
 /// Marker for user memory address type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct User;
 
 impl sealed::Sealed for Virtual {}
 impl sealed::Sealed for Physical {}
+impl sealed::Sealed for GuestPhysical {}
 impl sealed::Sealed for User {}
 
 impl MemKind for Virtual {}
 impl MemKind for Physical {}
+impl MemKind for GuestPhysical {}
 impl MemKind for User {}
 
 /// A memory address with a kind (`Virtual`, `Physical`, or `User`) and an
@@ -189,6 +195,10 @@ pub type TPA<T> = Address<Physical, T>;
 pub type TVA<T> = Address<Virtual, T>;
 /// A typed user address.
 pub type TUA<T> = Address<User, T>;
+/// A typed guest physical address.
+pub type TGPA<T> = Address<GuestPhysical, T>;
+/// A typed host physical address.
+pub type THPA<T> = TPA<T>;
 
 /// An untyped physical address.
 pub type PA = Address<Physical, ()>;
@@ -196,6 +206,10 @@ pub type PA = Address<Physical, ()>;
 pub type VA = Address<Virtual, ()>;
 /// An untyped user address.
 pub type UA = Address<User, ()>;
+/// An untyped guest physical address.
+pub type GPA = Address<GuestPhysical, ()>;
+/// An untyped host physical address.
+pub type HPA = PA;
 
 impl<T> TPA<T> {
     /// Convert to a raw const pointer.

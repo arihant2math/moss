@@ -31,7 +31,7 @@
 
 use super::{
     PAGE_SHIFT, PAGE_SIZE,
-    address::{Address, AddressTranslator, MemKind, Physical, User, Virtual},
+    address::{Address, AddressTranslator, GuestPhysical, MemKind, Physical, User, Virtual},
     page::PageFrame,
 };
 
@@ -251,8 +251,7 @@ impl<T: MemKind> MemoryRegion<T> {
     }
 
     /// Increases the capacity of the region by size bytes.
-    #[cfg(feature = "proc_vm")]
-    pub(crate) fn expand_by(&mut self, size: usize) {
+    pub fn expand_by(&mut self, size: usize) {
         assert!(size & crate::memory::PAGE_MASK == 0);
 
         self.size += size;
@@ -413,6 +412,9 @@ impl VirtMemoryRegion {
 
 /// A memory region of user-space addresses.
 pub type UserMemoryRegion = MemoryRegion<User>;
+
+/// A memory region of guest-physical memory.
+pub type GuestPhysMemoryRegion = MemoryRegion<GuestPhysical>;
 
 /// A representation of a `MemoryRegion` that has been expanded to be page-aligned.
 ///
