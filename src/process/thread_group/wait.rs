@@ -4,6 +4,7 @@ use super::{
     signal::{InterruptResult, Interruptable, SigId},
 };
 use crate::memory::uaccess::{UserCopyable, copy_to_user};
+use crate::process::fd_table::Fd;
 use crate::sched::syscall_ctx::ProcessCtx;
 use crate::sync::CondVar;
 use crate::{clock::timespec::TimeSpec, process::Tid};
@@ -367,6 +368,7 @@ pub enum IdType {
     P_ALL = 0,
     P_PID = 1,
     P_PGID = 2,
+    P_PIDFD = 3,
 }
 
 pub async fn sys_waitid(
@@ -381,6 +383,7 @@ pub async fn sys_waitid(
         0 => IdType::P_ALL,
         1 => IdType::P_PID,
         2 => IdType::P_PGID,
+        3 => IdType::P_PIDFD,
         _ => return Err(KernelError::InvalidValue),
     };
 
@@ -408,14 +411,29 @@ pub async fn sys_waitid(
         todo!();
     }
 
+    let task = ctx.shared();
+
     // Map which/id to pid selection used by our wait helpers
     let sel_pid: PidT = match which {
         IdType::P_ALL => -1,
         IdType::P_PID => id,
         IdType::P_PGID => -id.abs(), // negative means select by PGID in helpers
+        IdType::P_PIDFD => {
+            let file = {
+                let fd_table = task.fd_table.lock_save_irq();
+                fd_table.get(Fd(id))
+            };
+            if let Some(file) = file {
+                if let Some(pid_file) = file.lock().await.0.as_pidfd() {
+                    pid_file.pid().value() as PidT
+                } else {
+                    todo!("fd not pidfd")
+                }
+            } else {
+                todo!("fd not found");
+            }
+        }
     };
-
-    let task = ctx.shared();
 
     let child_proc_count = task.process.children.lock_save_irq().iter().count();
 

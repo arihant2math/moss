@@ -20,16 +20,13 @@ bitflags! {
 }
 
 pub struct PidFile {
-    _pid: Tid,
+    pid: Tid,
     _flags: PidfdFlags,
 }
 
 impl PidFile {
     pub fn new(pid: Tid, flags: PidfdFlags) -> Self {
-        Self {
-            _pid: pid,
-            _flags: flags,
-        }
+        Self { pid, _flags: flags }
     }
 
     pub fn new_open_file(pid: Tid, flags: PidfdFlags) -> Arc<OpenFile> {
@@ -38,6 +35,10 @@ impl PidFile {
             Box::new(file),
             OpenFlags::from_bits(flags.bits()).unwrap(),
         ))
+    }
+
+    pub fn pid(&self) -> Tid {
+        self.pid
     }
 }
 
@@ -50,14 +51,19 @@ impl FileOps for PidFile {
     async fn writeat(&mut self, _buf: UA, _count: usize, _offset: u64) -> Result<usize> {
         Err(KernelError::InvalidValue)
     }
+
+    fn as_pidfd(&mut self) -> Option<&mut PidFile> {
+        Some(self)
+    }
 }
 
 pub async fn sys_pidfd_open(ctx: &ProcessCtx, pid: PidT, flags: u32) -> Result<usize> {
     let pid = Tid::from_pid_t(pid);
     let flags = PidfdFlags::from_bits(flags).ok_or(KernelError::InvalidValue)?;
-    if !flags.contains(PidfdFlags::PIDFD_THREAD) {
-        // Ensure the pid exists and is a thread group leader.
-        let _ = find_task_by_tid(pid).unwrap();
+    let task = find_task_by_tid(pid).ok_or(KernelError::NoProcess)?;
+    // Ensure the pid is a thread group leader
+    if !flags.contains(PidfdFlags::PIDFD_THREAD) && (Tid::from_tgid(task.process.tgid) != pid) {
+        return Err(KernelError::NoProcess);
     }
 
     let file = PidFile::new_open_file(pid, flags);

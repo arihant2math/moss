@@ -159,4 +159,8 @@ pub trait FileOps: Send + Sync {
     fn as_timerfd(&mut self) -> Option<&mut crate::clock::syscalls::timerfd::TimerFd> {
         None
     }
+
+    fn as_pidfd(&mut self) -> Option<&mut crate::process::pidfd::PidFile> {
+        None
+    }
 }
