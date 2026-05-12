@@ -67,7 +67,6 @@ pub fn kern_err_to_syscall(err: KernelError) -> isize {
         KernelError::Fs(FsError::DirectoryNotEmpty) => ENOTEMPTY,
         KernelError::Fs(FsError::Busy) => EBUSY,
         KernelError::Fs(FsError::InvalidInput) => EINVAL, // TODO: Is this right?
-        KernelError::InUse => EBUSY,
         KernelError::Fs(FsError::PermissionDenied) => EACCES,
         KernelError::Fs(FsError::TooManyFiles) => EMFILE,
         KernelError::Fs(FsError::NoDevice) => ENODEV,
