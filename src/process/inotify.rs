@@ -35,8 +35,11 @@ use crate::{
 pub const IN_ACCESS: u32 = 0x0000_0001;
 pub const IN_MODIFY: u32 = 0x0000_0002;
 pub const IN_ATTRIB: u32 = 0x0000_0004;
+#[expect(unused)]
 pub const IN_CLOSE_WRITE: u32 = 0x0000_0008;
+#[expect(unused)]
 pub const IN_CLOSE_NOWRITE: u32 = 0x0000_0010;
+#[expect(unused)]
 pub const IN_OPEN: u32 = 0x0000_0020;
 pub const IN_MOVED_FROM: u32 = 0x0000_0040;
 pub const IN_MOVED_TO: u32 = 0x0000_0080;
@@ -447,6 +450,11 @@ async fn dispatch_event(inode_id: InodeId, mask: u32, cookie: u32, name: Option<
     for (wd, inner) in deliveries {
         inner.enqueue_filtered(wd, mask, cookie, name).await;
     }
+}
+
+#[expect(unused)]
+pub async fn notify_access(inode_id: InodeId) {
+    dispatch_event(inode_id, IN_ACCESS, 0, None).await;
 }
 
 pub async fn notify_modify(inode_id: InodeId) {
