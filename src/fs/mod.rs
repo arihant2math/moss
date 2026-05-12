@@ -88,9 +88,13 @@ impl VfsState {
         }
     }
 
+    fn register_filesystem(&mut self, fs: Arc<dyn Filesystem>) {
+        self.filesystems.entry(fs.id()).or_insert(fs);
+    }
+
     /// Registers a new filesystem and its mount point.
     fn add_mount(&mut self, mount_point_id: InodeId, mount: Mount) {
-        self.filesystems.insert(mount.fs.id(), mount.fs.clone());
+        self.register_filesystem(mount.fs.clone());
         self.mounts.insert(mount_point_id, mount);
     }
 
@@ -293,6 +297,10 @@ impl VFS {
         }
 
         Ok(())
+    }
+
+    pub fn register_internal_filesystem(&self, fs: Arc<dyn Filesystem>) {
+        self.state.lock_save_irq().register_filesystem(fs);
     }
 
     pub async fn get_fs(&self, inode: Arc<dyn Inode>) -> Result<Arc<dyn Filesystem>> {

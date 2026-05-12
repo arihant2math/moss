@@ -1,3 +1,6 @@
+use super::pidfs::pidfs;
+use crate::clock::realtime::date;
+use crate::fs::VFS;
 use crate::fs::fops::FileOps;
 use crate::fs::open_file::OpenFile;
 use crate::process::thread_group::pid::PidT;
@@ -8,8 +11,9 @@ use alloc::sync::Arc;
 use async_trait::async_trait;
 use bitflags::bitflags;
 use libkernel::error::{KernelError, Result};
-use libkernel::fs::OpenFlags;
+use libkernel::fs::{OpenFlags, pathbuf::PathBuf};
 use libkernel::memory::address::UA;
+use libkernel::proc::ids::{Gid, Uid};
 
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -29,12 +33,14 @@ impl PidFile {
         Self { pid, _flags: flags }
     }
 
-    pub fn new_open_file(pid: Tid, flags: PidfdFlags) -> Arc<OpenFile> {
+    pub fn new_open_file(pid: Tid, flags: PidfdFlags, uid: Uid, gid: Gid) -> Arc<OpenFile> {
         let file = PidFile::new(pid, flags);
-        Arc::new(OpenFile::new(
+        let mut open_file = OpenFile::new(
             Box::new(file),
-            OpenFlags::from_bits(flags.bits()).unwrap(),
-        ))
+            OpenFlags::O_RDWR | OpenFlags::from_bits_retain(flags.bits()),
+        );
+        open_file.update(pidfs().inode_for_pid(pid, uid, gid, date()), PathBuf::new());
+        Arc::new(open_file)
     }
 
     pub fn pid(&self) -> Tid {
@@ -66,7 +72,10 @@ pub async fn sys_pidfd_open(ctx: &ProcessCtx, pid: PidT, flags: u32) -> Result<u
         return Err(KernelError::NoProcess);
     }
 
-    let file = PidFile::new_open_file(pid, flags);
+    VFS.register_internal_filesystem(pidfs());
+
+    let creds = ctx.shared().creds.lock_save_irq().clone();
+    let file = PidFile::new_open_file(pid, flags, creds.uid(), creds.gid());
 
     let fd = ctx.task().fd_table.lock_save_irq().insert(file)?;
 

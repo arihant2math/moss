@@ -46,6 +46,7 @@ pub mod fd_table;
 pub mod inotify;
 pub mod owned;
 pub mod pidfd;
+mod pidfs;
 pub mod prctl;
 pub mod ptrace;
 pub mod sleep;

@@ -9,6 +9,7 @@ mod epoll;
 mod fs;
 mod futex;
 mod inotify;
+mod pidfd;
 mod signalfd;
 mod signals;
 mod socket;

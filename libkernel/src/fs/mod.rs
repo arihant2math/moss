@@ -65,6 +65,8 @@ pub const PROCFS_ID: u64 = 2;
 pub const SYSFS_ID: u64 = 3;
 /// Filesystem instance ID for the cgroup filesystem.
 pub const CGROUPFS_ID: u64 = 4;
+/// Filesystem instance ID for the internal pidfd filesystem.
+pub const PIDFS_ID: u64 = 5;
 /// Starting ID for user-mounted filesystem instances.
 pub const FS_ID_START: u64 = 10;
 

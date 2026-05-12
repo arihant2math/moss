@@ -3,7 +3,10 @@ use crate::memory::uaccess::copy_to_user;
 use crate::{clock::realtime::date, process::fd_table::Fd, sched::syscall_ctx::ProcessCtx};
 use libkernel::error::{KernelError, Result};
 use libkernel::{
-    fs::{FileType, InodeId, attr::{FileAttr, FilePermissions}},
+    fs::{
+        FileType, InodeId,
+        attr::{FileAttr, FilePermissions},
+    },
     memory::PAGE_SIZE,
     memory::address::TUA,
 };
