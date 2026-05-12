@@ -44,6 +44,7 @@ pub const ERANGE: isize = -34;
 pub const EWOULDBLOCK: isize = -EAGAIN;
 pub const ENAMETOOLONG: isize = -36;
 pub const ENOSYS: isize = -38;
+pub const ENOTEMPTY: isize = -39;
 pub const ELOOP: isize = -40;
 pub const EAFNOSUPPORT: isize = -97;
 pub const EOPNOTSUPP: isize = -95;
@@ -63,6 +64,8 @@ pub fn kern_err_to_syscall(err: KernelError) -> isize {
         KernelError::Fs(FsError::IsADirectory) => EISDIR,
         KernelError::Fs(FsError::NotADirectory) => ENOTDIR,
         KernelError::Fs(FsError::AlreadyExists) => EEXIST,
+        KernelError::Fs(FsError::DirectoryNotEmpty) => ENOTEMPTY,
+        KernelError::Fs(FsError::Busy) => EBUSY,
         KernelError::Fs(FsError::InvalidInput) => EINVAL, // TODO: Is this right?
         KernelError::Fs(FsError::PermissionDenied) => EACCES,
         KernelError::Fs(FsError::TooManyFiles) => EMFILE,
