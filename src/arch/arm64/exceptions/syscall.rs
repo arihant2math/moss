@@ -76,7 +76,7 @@ use crate::{
         clone::sys_clone,
         creds::{
             sys_getegid, sys_geteuid, sys_getgid, sys_getgroups, sys_getresgid, sys_getresuid,
-            sys_getsid, sys_gettid, sys_getuid, sys_setfsgid, sys_setfsuid, sys_setgid,
+            sys_getsid, sys_gettid, sys_getuid, sys_setfsgid, sys_setfsuid, sys_setgid, sys_setgroups,
             sys_setregid, sys_setresgid, sys_setresuid, sys_setreuid, sys_setsid, sys_setuid,
         },
         epoll::{sys_epoll_create1, sys_epoll_ctl, sys_epoll_pwait},
@@ -656,6 +656,7 @@ pub async fn handle_syscall(mut ctx: ProcessCtx) {
         0x9c => sys_getsid(&ctx).await,
         0x9d => sys_setsid(&ctx).await,
         0x9e => sys_getgroups(&ctx, arg1 as _, TUA::from_value(arg2 as _)).map_err(|e| match e {}),
+        0x9f => sys_setgroups(&ctx, arg1 as _, TUA::from_value(arg2 as _)).map_err(|e| match e {}),
         0xa0 => sys_uname(TUA::from_value(arg1 as _)).await,
         0xa1 => sys_sethostname(&ctx, TUA::from_value(arg1 as _), arg2 as _).await,
         0xa3 => Err(KernelError::InvalidValue),
