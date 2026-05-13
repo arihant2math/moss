@@ -1,6 +1,6 @@
 use crate::memory::uaccess::{copy_from_user, copy_to_user, copy_to_user_slice};
+use crate::net::SocketLen;
 use crate::net::sops::RecvFlags;
-use crate::net::{SocketLen, parse_sockaddr};
 use crate::process::fd_table::Fd;
 use crate::sched::syscall_ctx::ProcessCtx;
 use libkernel::error::KernelError;
@@ -28,15 +28,9 @@ pub async fn sys_recvfrom(
     let (ops, ctx) = &mut *file.lock().await;
     let socket = ops.as_socket().ok_or(KernelError::NotASocket)?;
     let flags = RecvFlags::from_bits(flags as u32).unwrap_or(RecvFlags::empty());
-    let socket_addr = if !addr.is_null() {
-        let addrlen_val = copy_from_user(addrlen).await?;
-        Some(parse_sockaddr(addr, addrlen_val).await?)
-    } else {
-        None
-    };
-    let (message_len, recv_addr) = socket.recvfrom(ctx, buf, len, flags, socket_addr).await?;
+    let (message_len, recv_addr) = socket.recvfrom(ctx, buf, len, flags, None).await?;
     if let Some(recv_addr) = recv_addr
-        && addr.is_null()
+        && !addr.is_null()
     {
         if addrlen.is_null() {
             return Err(KernelError::InvalidValue);

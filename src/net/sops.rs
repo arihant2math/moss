@@ -81,6 +81,10 @@ pub trait SocketOps: Send + Sync {
         Err(KernelError::NotSupported)
     }
 
+    async fn release_socket(&mut self, _ctx: &FileCtx) -> libkernel::error::Result<()> {
+        Ok(())
+    }
+
     fn as_file(self: Box<Self>) -> Box<dyn FileOps>;
 }
 
@@ -125,6 +129,10 @@ where
         _offset: u64,
     ) -> libkernel::error::Result<usize> {
         Err(KernelError::NotSupported)
+    }
+
+    async fn release(&mut self, ctx: &FileCtx) -> libkernel::error::Result<()> {
+        self.release_socket(ctx).await
     }
 
     fn as_socket(&mut self) -> Option<&mut dyn SocketOps> {

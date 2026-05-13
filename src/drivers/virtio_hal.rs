@@ -7,7 +7,7 @@ use libkernel::memory::region::PhysMemoryRegion;
 use log::trace;
 use virtio_drivers::{BufferDirection, Hal, PhysAddr};
 
-pub(super) struct VirtioHal;
+pub(crate) struct VirtioHal;
 
 impl VirtioHal {
     #[inline]

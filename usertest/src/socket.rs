@@ -1,19 +1,215 @@
 use crate::register_test;
 use libc::{AF_INET, AF_UNIX, SOCK_DGRAM, SOCK_STREAM};
 use libc::{accept, bind, connect, listen, shutdown, socket};
-
 use std::io::{Read, Write};
+use std::net::Ipv4Addr;
+use std::ptr;
 
-pub fn test_tcp_socket_creation() {
+pub fn test_inet_socket_creation() {
     unsafe {
         let sockfd = socket(AF_INET, SOCK_STREAM, 0);
         if sockfd < 0 {
             panic!("Failed to create TCP socket");
         }
+
+        let sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+        if sockfd < 0 {
+            panic!("Failed to create UDP socket");
+        }
     }
 }
 
-register_test!(test_tcp_socket_creation);
+register_test!(test_inet_socket_creation);
+
+const SERVER_IP: &str = "127.0.0.1";
+const SERVER_PORT: u16 = 10000;
+
+fn loopback_addr(port: u16) -> libc::sockaddr_in {
+    let mut addr: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+    addr.sin_family = libc::AF_INET as libc::sa_family_t;
+    addr.sin_port = port.to_be();
+    addr.sin_addr.s_addr = u32::from_ne_bytes([127, 0, 0, 1]);
+    addr
+}
+
+fn write_all_fd(fd: libc::c_int, buf: &[u8]) {
+    let mut written = 0;
+    while written < buf.len() {
+        let n = unsafe {
+            libc::write(
+                fd,
+                buf[written..].as_ptr() as *const libc::c_void,
+                buf.len() - written,
+            )
+        };
+        if n < 0 {
+            panic!("write failed: {}", std::io::Error::last_os_error());
+        }
+        if n == 0 {
+            panic!("write returned 0 before the full buffer was written");
+        }
+        written += n as usize;
+    }
+}
+
+fn read_exact_fd(fd: libc::c_int, buf: &mut [u8]) {
+    let mut read = 0;
+    while read < buf.len() {
+        let n = unsafe {
+            libc::read(
+                fd,
+                buf[read..].as_mut_ptr() as *mut libc::c_void,
+                buf.len() - read,
+            )
+        };
+        if n < 0 {
+            panic!("read failed: {}", std::io::Error::last_os_error());
+        }
+        if n == 0 {
+            panic!("unexpected EOF while reading from socket");
+        }
+        read += n as usize;
+    }
+}
+
+pub fn test_tcp_socket_bind() {
+    unsafe {
+        let sock_fd = libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0);
+        if sock_fd < 0 {
+            panic!(
+                "Socket creation failed. errno: {}",
+                *libc::__errno_location()
+            );
+        }
+
+        let mut server_addr: libc::sockaddr_in = std::mem::zeroed();
+        server_addr.sin_family = libc::AF_INET as libc::sa_family_t;
+        server_addr.sin_port = SERVER_PORT.to_be(); // Host to network byte order
+
+        // Parse natively using Rust's compiler, handling any validation errors
+        let ip: Ipv4Addr = SERVER_IP.parse().expect("Invalid IP address string");
+        let ip_bytes = ip.octets(); // Gets [u8; 4]
+
+        // Copy the byte-array directly into the network address field
+        server_addr.sin_addr.s_addr = u32::from_ne_bytes(ip_bytes);
+
+        let bind_res = libc::bind(
+            sock_fd,
+            &server_addr as *const libc::sockaddr_in as *const libc::sockaddr,
+            std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+        );
+
+        if bind_res < 0 {
+            libc::close(sock_fd);
+            panic!("Bind failed. errno: {}", *libc::__errno_location());
+        }
+
+        libc::close(sock_fd);
+    }
+}
+
+register_test!(test_tcp_socket_bind);
+
+pub fn test_tcp_client_server() {
+    let server_port = 20_000 + (unsafe { libc::getpid() } % 20_000) as u16;
+    let server_addr = loopback_addr(server_port);
+
+    let server_fd = unsafe { socket(AF_INET, SOCK_STREAM, 0) };
+    assert!(
+        server_fd >= 0,
+        "server socket creation failed: {}",
+        std::io::Error::last_os_error()
+    );
+
+    let ret = unsafe {
+        bind(
+            server_fd,
+            &server_addr as *const libc::sockaddr_in as *const libc::sockaddr,
+            std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+        )
+    };
+    assert_eq!(ret, 0, "bind failed: {}", std::io::Error::last_os_error());
+
+    let ret = unsafe { listen(server_fd, 1) };
+    assert_eq!(ret, 0, "listen failed: {}", std::io::Error::last_os_error());
+
+    let pid = unsafe { libc::fork() };
+    if pid < 0 {
+        panic!("fork failed: {}", std::io::Error::last_os_error());
+    }
+
+    if pid == 0 {
+        unsafe {
+            libc::close(server_fd);
+        }
+
+        let client_fd = unsafe { socket(AF_INET, SOCK_STREAM, 0) };
+        assert!(
+            client_fd >= 0,
+            "client socket creation failed: {}",
+            std::io::Error::last_os_error()
+        );
+
+        let ret = unsafe {
+            connect(
+                client_fd,
+                &server_addr as *const libc::sockaddr_in as *const libc::sockaddr,
+                std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+            )
+        };
+        assert_eq!(
+            ret,
+            0,
+            "client connect failed: {}",
+            std::io::Error::last_os_error()
+        );
+
+        write_all_fd(client_fd, b"hello");
+
+        let mut buf = [0u8; 5];
+        read_exact_fd(client_fd, &mut buf);
+        assert_eq!(&buf, b"world");
+
+        unsafe {
+            libc::close(client_fd);
+            libc::_exit(0);
+        }
+    } else {
+        let conn_fd = unsafe { accept(server_fd, ptr::null_mut(), ptr::null_mut()) };
+        assert!(
+            conn_fd >= 0,
+            "accept failed: {}",
+            std::io::Error::last_os_error()
+        );
+
+        let mut buf = [0u8; 5];
+        read_exact_fd(conn_fd, &mut buf);
+        assert_eq!(&buf, b"hello");
+
+        write_all_fd(conn_fd, b"world");
+
+        unsafe {
+            libc::close(conn_fd);
+            libc::close(server_fd);
+        }
+
+        let mut status = 0;
+        let waited = unsafe { libc::waitpid(pid, &mut status, 0) };
+        assert_eq!(
+            waited,
+            pid,
+            "waitpid failed: {}",
+            std::io::Error::last_os_error()
+        );
+        assert!(
+            libc::WIFEXITED(status),
+            "client process did not exit normally"
+        );
+        assert_eq!(libc::WEXITSTATUS(status), 0, "client process failed");
+    }
+}
+
+register_test!(test_tcp_client_server);
 
 pub fn test_unix_socket_creation() {
     unsafe {

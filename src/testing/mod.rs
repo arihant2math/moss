@@ -73,19 +73,19 @@ macro_rules! ktest_impl {
         paste::paste! {
             #[cfg(test)]
             #[test_case]
-            static [<__TEST_ $name>]: crate::testing::Test = crate::testing::Test {
+            static [<__TEST_ $name>]: $crate::testing::Test = $crate::testing::Test {
                 name: concat!(module_path!(), "::", stringify!($name)),
                 test_fn: || {
                     let result = unsafe {
                         core::intrinsics::catch_unwind(
                             $fn_name as fn(*mut u8),
                             core::ptr::null_mut(),
-                            crate::testing::panic_noop,
+                            $crate::testing::panic_noop,
                         )
                     };
                     match result {
-                        0 => crate::testing::TestResult::Ok,
-                        1 => crate::testing::TestResult::Failed,
+                        0 => $crate::testing::TestResult::Ok,
+                        1 => $crate::testing::TestResult::Failed,
                         _ => unreachable!("catch_unwind should only return 0 or 1"),
                     }
                 },
@@ -93,7 +93,7 @@ macro_rules! ktest_impl {
         }
     };
     (fn $name:ident() $body:block) => {
-        crate::ktest_impl!($name, fn $name() $body);
+        $crate::ktest_impl!($name, fn $name() $body);
     };
     (async fn $name:ident() $body:block) => {
         async fn $name() {
@@ -101,11 +101,11 @@ macro_rules! ktest_impl {
         }
 
         paste::paste! {
-            crate::ktest_impl! {
+            $crate::ktest_impl! {
                 $name,
                 fn [<__sync_ $name>]() {
                     let mut fut = alloc::boxed::Box::pin($name());
-                    let waker = crate::sched::current_work_waker();
+                    let waker = $crate::sched::current_work_waker();
                     let mut ctx = core::task::Context::from_waker(&waker);
                     loop {
                         match fut.as_mut().poll(&mut ctx) {

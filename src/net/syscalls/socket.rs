@@ -1,8 +1,11 @@
 use crate::fs::fops::FileOps;
 use crate::fs::open_file::OpenFile;
 use crate::net::tcp::TcpSocket;
+use crate::net::udp::UdpSocket;
 use crate::net::unix::UnixSocket;
-use crate::net::{AF_INET, AF_UNIX, IPPROTO_TCP, SOCK_DGRAM, SOCK_SEQPACKET, SOCK_STREAM};
+use crate::net::{
+    AF_INET, AF_UNIX, IPPROTO_TCP, IPPROTO_UDP, SOCK_DGRAM, SOCK_SEQPACKET, SOCK_STREAM,
+};
 use crate::sched::syscall_ctx::ProcessCtx;
 use alloc::boxed::Box;
 use alloc::sync::Arc;
@@ -24,7 +27,10 @@ pub async fn sys_socket(
     let type_ = type_ & !(CLOSE_ON_EXEC | NONBLOCK);
     let new_socket: Box<dyn FileOps> = match (domain, type_, protocol) {
         (AF_INET, SOCK_STREAM, 0) | (AF_INET, SOCK_STREAM, IPPROTO_TCP) => {
-            Box::new(TcpSocket::new())
+            Box::new(TcpSocket::new()?)
+        }
+        (AF_INET, SOCK_DGRAM, 0) | (AF_INET, SOCK_DGRAM, IPPROTO_UDP) => {
+            Box::new(UdpSocket::new()?)
         }
         (AF_UNIX, SOCK_STREAM, _) => Box::new(UnixSocket::new_stream()),
         (AF_UNIX, SOCK_DGRAM, _) => Box::new(UnixSocket::new_datagram()),

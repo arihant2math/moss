@@ -26,12 +26,13 @@ pub mod fdt_prober;
 pub mod fs;
 pub mod init;
 pub mod interrupts;
+pub mod net;
 pub mod probe;
 pub mod rng;
 pub mod rtc;
 pub mod timer;
 pub mod uart;
-mod virtio_hal;
+pub(crate) mod virtio_hal;
 
 #[repr(u64)]
 pub enum ReservedMajors {
