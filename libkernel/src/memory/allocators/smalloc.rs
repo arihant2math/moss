@@ -41,6 +41,8 @@ pub struct RegionList {
     regions: *mut PhysMemoryRegion,
 }
 
+const NULL_PAGE_RGN: PhysMemoryRegion = PhysMemoryRegion::new(PA::null(), PAGE_SIZE);
+
 impl RegionList {
     /// Returns `true` if the list contains no regions.
     pub fn is_empty(&self) -> bool {
@@ -247,6 +249,14 @@ impl<T: AddressTranslator<()>> Smalloc<T> {
         let address = self
             .find_allocation_location(size, align)
             .ok_or(KernelError::NoMemory)?;
+
+        if address.is_null() {
+            // Reserve the zero page and try again. We never want to return
+            // an allocation of NULL since it trips up UB checks.
+            self.res.insert_region(NULL_PAGE_RGN);
+
+            return self.alloc(size, align);
+        }
 
         // Allocation fits and doesn't overlap any reservation
         self.res.insert_region(PhysMemoryRegion::new(address, size));
