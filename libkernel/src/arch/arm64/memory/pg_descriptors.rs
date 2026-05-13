@@ -219,6 +219,10 @@ macro_rules! define_descriptor {
                     let addr = reg.read(BlockPageFields::OUTPUT_ADDR);
                     Some(PA::from_value((addr << Self::MAP_SHIFT) as usize))
                 }
+
+                fn permissions(self) -> Option<PtePermissions> {
+                    self.permissions()
+                }
             }
             }
         )?

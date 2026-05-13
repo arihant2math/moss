@@ -70,6 +70,9 @@ pub trait PaMapper: PageTableEntry {
 
     /// Return the mapped physical address.
     fn mapped_address(self) -> Option<PA>;
+
+    /// Return the permissions set on the PTE.
+    fn permissions(self) -> Option<PtePermissions>;
 }
 
 /// Trait representing a single level of the page table hierarchy.
