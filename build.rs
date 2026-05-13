@@ -14,6 +14,13 @@ fn main() {
     };
 
     println!("cargo::rerun-if-changed={}", linker_script.display());
+
+    if matches!(std::env::var("CARGO_CFG_TARGET_ARCH").as_deref(), Ok("x86_64")) {
+        // The x86_64 kernel is linked at a fixed higher-half virtual address,
+        // so it must not be emitted as a PIE.
+        println!("cargo::rustc-link-arg=-no-pie");
+    }
+
     println!("cargo::rustc-link-arg=-T{}", linker_script.display());
 
     // Set an environment variable with the date and time of the build

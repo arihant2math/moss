@@ -2,6 +2,7 @@ use core::{arch::asm, arch::x86_64::__cpuid};
 
 use libkernel::CpuOps;
 
+mod boot;
 pub mod memory;
 
 #[allow(non_camel_case_types)]

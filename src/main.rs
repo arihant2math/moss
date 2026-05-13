@@ -15,9 +15,13 @@ use alloc::{
     vec,
     vec::Vec,
 };
+#[cfg(target_arch = "aarch64")]
 use arch::{Arch, ArchImpl};
+use core::arch::asm;
 use core::panic::PanicInfo;
+#[cfg(target_arch = "aarch64")]
 use drivers::{fdt_prober::get_fdt, fs::register_fs_drivers};
+#[cfg(target_arch = "aarch64")]
 use fs::VFS;
 use getargs::{Opt, Options};
 use libkernel::{
@@ -33,7 +37,9 @@ use libkernel::{
     },
 };
 use log::{error, warn};
+#[cfg(target_arch = "aarch64")]
 use process::ctx::UserCtx;
+#[cfg(target_arch = "aarch64")]
 use sched::{
     sched_init, spawn_kernel_work, syscall_ctx::ProcessCtx, uspc_ret::dispatch_userspace_task,
 };
@@ -41,21 +47,37 @@ use sched::{
 extern crate alloc;
 extern crate moss_macros;
 
+#[cfg(target_arch = "aarch64")]
 mod arch;
+#[cfg(target_arch = "x86_64")]
+#[path = "arch/x86_64/mod.rs"]
+mod arch_x86_64;
+#[cfg(target_arch = "aarch64")]
 mod clock;
+#[cfg(target_arch = "aarch64")]
 mod console;
+#[cfg(target_arch = "aarch64")]
 mod drivers;
+#[cfg(target_arch = "aarch64")]
 mod fs;
+#[cfg(target_arch = "aarch64")]
 mod interrupts;
+#[cfg(target_arch = "aarch64")]
 mod kernel;
+#[cfg(target_arch = "aarch64")]
 mod memory;
+#[cfg(target_arch = "aarch64")]
 mod net;
+#[cfg(target_arch = "aarch64")]
 mod process;
+#[cfg(target_arch = "aarch64")]
 mod sched;
+#[cfg(target_arch = "aarch64")]
 mod sync;
 #[cfg(test)]
 pub mod testing;
 
+#[cfg(target_arch = "aarch64")]
 #[panic_handler]
 fn on_panic(info: &PanicInfo) -> ! {
     ArchImpl::disable_interrupts();
@@ -77,119 +99,132 @@ fn on_panic(info: &PanicInfo) -> ! {
     ArchImpl::power_off();
 }
 
-async fn launch_init(mut ctx: ProcessCtx, mut opts: KOptions) {
-    let init = opts
-        .init
-        .unwrap_or_else(|| panic!("No init specified in kernel command line"));
-
-    let dt = get_fdt();
-
-    let initrd_block_dev: Option<Box<dyn BlockDevice>> = if let Some(chosen) =
-        dt.find_nodes("/chosen").next()
-        && let Some(start_addr) = chosen
-            .find_property("linux,initrd-start")
-            .map(|prop| prop.u64())
-        && let Some(end_addr) = chosen
-            .find_property("linux,initrd-end")
-            .map(|prop| prop.u64())
-    {
-        let region = PhysMemoryRegion::from_start_end_address(
-            PA::from_value(start_addr as _),
-            PA::from_value(end_addr as _),
-        );
-
-        Some(Box::new(
-            RamdiskBlkDev::new(
-                region,
-                VA::from_value(0xffff_9800_0000_0000),
-                &mut *ArchImpl::kern_address_space().lock_save_irq(),
-            )
-            .unwrap(),
-        ))
-    } else {
-        None
-    };
-
-    // Set time to rtc time if possible
-    if let Some(rtc) = drivers::rtc::get_rtc()
-        && let Some(time) = rtc.time()
-    {
-        clock::realtime::set_date(time);
+#[cfg(target_arch = "x86_64")]
+#[panic_handler]
+fn on_panic(info: &PanicInfo) -> ! {
+    unsafe {
+        asm! {
+        "cli", // Disable interrupts to prevent further damage
+        }
+        loop {
+            asm!("hlt");
+        }
     }
+}
 
-    let root_fs = opts
-        .root_fs
-        .unwrap_or_else(|| panic!("No root FS driver specified in kernel command line"));
-
-    VFS.mount_root(&root_fs, initrd_block_dev)
-        .await
-        .unwrap_or_else(|e| panic!("Failed to mount root FS: {e}"));
-
-    // Process all automounts.
-    for (path, fs) in opts.automounts.iter() {
-        let mount_point = VFS
-            .resolve_path_absolute(path, VFS.root_inode())
-            .await
-            .unwrap_or_else(|e| panic!("Could not find automount path: {}. {e}", path.as_str()));
-
-        VFS.mount(mount_point, fs, None)
-            .await
-            .unwrap_or_else(|e| panic!("Automount failed: {e}"));
-    }
-
-    let inode = VFS
-        .resolve_path_absolute(&init, VFS.root_inode())
-        .await
-        .expect("Unable to find init");
-
-    let task = ctx.shared().clone();
-
-    // Ensure that the exec() call applies to init.
-    assert!(task.process.tgid.is_init());
-
-    // Now that the root fs has been mounted, set the real root inode as the
-    // cwd and root.
-    *task.cwd.lock_save_irq() = (VFS.root_inode(), PathBuf::from("/"));
-    *task.root.lock_save_irq() = (VFS.root_inode(), PathBuf::from("/"));
-
-    let console = VFS
-        .open(
-            Path::new("/dev/console"),
-            OpenFlags::O_RDWR,
-            VFS.root_inode(),
-            FilePermissions::empty(),
-            &task,
-        )
-        .await
-        .expect("Could not open console for init process");
-
-    {
-        let mut fd_table = task.fd_table.lock_save_irq();
-
-        // stdin, stdout, stderr
-        fd_table
-            .insert(console.clone())
-            .expect("Could not clone FD");
-        fd_table
-            .insert(console.clone())
-            .expect("Could not clone FD");
-        fd_table
-            .insert(console.clone())
-            .expect("Could not clone FD");
-    }
-
-    #[cfg(test)]
-    test_main();
-
-    drop(task);
-
-    let mut init_args = vec![init.as_str().to_string()];
-
-    init_args.append(&mut opts.init_args);
-
-    process::exec::kernel_exec(&mut ctx, init.as_path(), inode, init_args, vec![])
-        .await
-        .expect("Could not launch init process");
+async fn launch_init(mut ctx: u8, mut opts: KOptions) {
+    //     let init = opts
+    //         .init
+    //         .unwrap_or_else(|| panic!("No init specified in kernel command line"));
+    //
+    //     let dt = get_fdt();
+    //
+    //     let initrd_block_dev: Option<Box<dyn BlockDevice>> = if let Some(chosen) =
+    //         dt.find_nodes("/chosen").next()
+    //         && let Some(start_addr) = chosen
+    //             .find_property("linux,initrd-start")
+    //             .map(|prop| prop.u64())
+    //         && let Some(end_addr) = chosen
+    //             .find_property("linux,initrd-end")
+    //             .map(|prop| prop.u64())
+    //     {
+    //         let region = PhysMemoryRegion::from_start_end_address(
+    //             PA::from_value(start_addr as _),
+    //             PA::from_value(end_addr as _),
+    //         );
+    //
+    //         Some(Box::new(
+    //             RamdiskBlkDev::new(
+    //                 region,
+    //                 VA::from_value(0xffff_9800_0000_0000),
+    //                 &mut *ArchImpl::kern_address_space().lock_save_irq(),
+    //             )
+    //             .unwrap(),
+    //         ))
+    //     } else {
+    //         None
+    //     };
+    //
+    //     // Set time to rtc time if possible
+    //     if let Some(rtc) = drivers::rtc::get_rtc()
+    //         && let Some(time) = rtc.time()
+    //     {
+    //         clock::realtime::set_date(time);
+    //     }
+    //
+    //     let root_fs = opts
+    //         .root_fs
+    //         .unwrap_or_else(|| panic!("No root FS driver specified in kernel command line"));
+    //
+    //     VFS.mount_root(&root_fs, initrd_block_dev)
+    //         .await
+    //         .unwrap_or_else(|e| panic!("Failed to mount root FS: {e}"));
+    //
+    //     // Process all automounts.
+    //     for (path, fs) in opts.automounts.iter() {
+    //         let mount_point = VFS
+    //             .resolve_path_absolute(path, VFS.root_inode())
+    //             .await
+    //             .unwrap_or_else(|e| panic!("Could not find automount path: {}. {e}", path.as_str()));
+    //
+    //         VFS.mount(mount_point, fs, None)
+    //             .await
+    //             .unwrap_or_else(|e| panic!("Automount failed: {e}"));
+    //     }
+    //
+    //     let inode = VFS
+    //         .resolve_path_absolute(&init, VFS.root_inode())
+    //         .await
+    //         .expect("Unable to find init");
+    //
+    //     let task = ctx.shared().clone();
+    //
+    //     // Ensure that the exec() call applies to init.
+    //     assert!(task.process.tgid.is_init());
+    //
+    //     // Now that the root fs has been mounted, set the real root inode as the
+    //     // cwd and root.
+    //     *task.cwd.lock_save_irq() = (VFS.root_inode(), PathBuf::from("/"));
+    //     *task.root.lock_save_irq() = (VFS.root_inode(), PathBuf::from("/"));
+    //
+    //     let console = VFS
+    //         .open(
+    //             Path::new("/dev/console"),
+    //             OpenFlags::O_RDWR,
+    //             VFS.root_inode(),
+    //             FilePermissions::empty(),
+    //             &task,
+    //         )
+    //         .await
+    //         .expect("Could not open console for init process");
+    //
+    //     {
+    //         let mut fd_table = task.fd_table.lock_save_irq();
+    //
+    //         // stdin, stdout, stderr
+    //         fd_table
+    //             .insert(console.clone())
+    //             .expect("Could not clone FD");
+    //         fd_table
+    //             .insert(console.clone())
+    //             .expect("Could not clone FD");
+    //         fd_table
+    //             .insert(console.clone())
+    //             .expect("Could not clone FD");
+    //     }
+    //
+    //     #[cfg(test)]
+    //     test_main();
+    //
+    //     drop(task);
+    //
+    //     let mut init_args = vec![init.as_str().to_string()];
+    //
+    //     init_args.append(&mut opts.init_args);
+    //
+    //     process::exec::kernel_exec(&mut ctx, init.as_path(), inode, init_args, vec![])
+    //         .await
+    //         .expect("Could not launch init process");
 }
 
 struct KOptions {
@@ -232,21 +267,21 @@ fn parse_args(args: &str) -> KOptions {
     }
 }
 
-pub fn kmain(args: String, ctx_frame: *mut UserCtx) {
-    sched_init();
-
-    register_fs_drivers();
-
-    let kopts = parse_args(&args);
-
+pub fn kmain(args: String, ctx_frame: *mut u8) {
+    // sched_init();
+    //
+    // register_fs_drivers();
+    //
+    // let kopts = parse_args(&args);
+    //
     {
-        // SAFETY: kmain is called prior to init being launched. Thefore, we
-        // will be the only access to `ctx` at this point.
-        let mut ctx = unsafe { ProcessCtx::from_current() };
-        let ctx2 = unsafe { ctx.clone() };
-
-        spawn_kernel_work(&mut ctx, launch_init(ctx2, kopts));
+        //     // SAFETY: kmain is called prior to init being launched. Thefore, we
+        //     // will be the only access to `ctx` at this point.
+        //     let mut ctx = unsafe { ProcessCtx::from_current() };
+        //     let ctx2 = unsafe { ctx.clone() };
+        //
+        //     spawn_kernel_work(&mut ctx, launch_init(ctx2, kopts));
     }
-
-    dispatch_userspace_task(ctx_frame);
+    //
+    // dispatch_userspace_task(ctx_frame);
 }
