@@ -195,6 +195,14 @@ macro_rules! impl_pa_mapper {
 
                     Some(self.address())
                 }
+
+                fn permissions(self) -> Option<PtePermissions> {
+                    if (self.0 & $marker) != $marker {
+                        return None;
+                    }
+
+                    Some(self.permissions())
+                }
             }
             }
         )+

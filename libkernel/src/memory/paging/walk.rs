@@ -3,14 +3,14 @@
 use crate::{
     error::MapError,
     memory::{
-        address::{TPA, VA},
+        address::{PA, TPA, VA},
         region::VirtMemoryRegion,
     },
 };
 
 use super::{
-    PageTableEntry, PageTableMapper, PgTable, PgTableArray, TLBInvalidator, TableMapper,
-    TableMapperTable,
+    PaMapper, PageTableEntry, PageTableMapper, PgTable, PgTableArray, TLBInvalidator, TableMapper,
+    TableMapperTable, permissions::PtePermissions,
 };
 
 /// A collection of context required to modify page tables.
@@ -94,5 +94,42 @@ where
         }
 
         Ok(())
+    }
+}
+
+pub(crate) trait Translator: PgTable + Sized {
+    fn translate<PM: PageTableMapper>(
+        table_pa: TPA<PgTableArray<Self>>,
+        va: VA,
+        ctx: &mut WalkContext<PM>,
+    ) -> crate::error::Result<Option<(PA, usize, PtePermissions)>>;
+}
+
+impl<T> Translator for T
+where
+    T: TableMapperTable,
+    T::Descriptor: PaMapper,
+    <T::Descriptor as TableMapper>::NextLevel: Translator,
+{
+    fn translate<PM: PageTableMapper>(
+        table_pa: TPA<PgTableArray<Self>>,
+        va: VA,
+        ctx: &mut WalkContext<PM>,
+    ) -> crate::error::Result<Option<(PA, usize, PtePermissions)>> {
+        let desc = unsafe {
+            ctx.mapper
+                .with_page_table(table_pa, |pgtable| T::from_ptr(pgtable).get_desc(va))?
+        };
+
+        if let Some(next_pa) = desc.next_table_address() {
+            <T::Descriptor as TableMapper>::NextLevel::translate(next_pa, va, ctx)
+        } else if let Some(block_pa) = desc.mapped_address() {
+            let block_size = 1usize << T::Descriptor::MAP_SHIFT;
+            Ok(Some((block_pa, block_size, desc.permissions().unwrap())))
+        } else if desc.is_valid() {
+            Err(MapError::InvalidDescriptor)?
+        } else {
+            Ok(None)
+        }
     }
 }

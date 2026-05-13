@@ -4,18 +4,20 @@ use crate::{
     error::{MapError, Result},
     memory::{
         PAGE_SIZE,
-        address::{TPA, VA},
+        address::{PA, TPA, VA},
         paging::{
-            NullTlbInvalidator, PageTableEntry, PageTableMapper, PgTable, PgTableArray,
-            walk::{RecursiveWalker, WalkContext},
+            NullTlbInvalidator, PaMapper, PageTableEntry, PageTableMapper, PgTable, PgTableArray,
+            TableMapper,
+            permissions::PtePermissions,
+            walk::{RecursiveWalker, Translator, WalkContext},
         },
-        region::VirtMemoryRegion,
+        region::{PhysMemoryRegion, VirtMemoryRegion},
     },
 };
 
 use super::{
     pg_descriptors::PTE,
-    pg_tables::{PML4Table, PTable},
+    pg_tables::{PDPTable, PML4Table, PTable},
 };
 
 impl RecursiveWalker<PTE> for PTable {
@@ -110,6 +112,70 @@ pub fn get_pte<PM: PageTableMapper>(
     )?;
 
     Ok(descriptor)
+}
+
+impl Translator for PML4Table {
+    fn translate<PM: PageTableMapper>(
+        table_pa: TPA<PgTableArray<Self>>,
+        va: VA,
+        ctx: &mut WalkContext<PM>,
+    ) -> Result<Option<(PA, usize, PtePermissions)>> {
+        let desc = unsafe {
+            ctx.mapper
+                .with_page_table(table_pa, |pgtable| Self::from_ptr(pgtable).get_desc(va))?
+        };
+        match desc.next_table_address() {
+            Some(next_pa) => PDPTable::translate(next_pa, va, ctx),
+            None if desc.is_valid() => Err(MapError::InvalidDescriptor.into()),
+            None => Ok(None),
+        }
+    }
+}
+
+impl Translator for PTable {
+    fn translate<PM: PageTableMapper>(
+        table_pa: TPA<PgTableArray<Self>>,
+        va: VA,
+        ctx: &mut WalkContext<PM>,
+    ) -> Result<Option<(PA, usize, PtePermissions)>> {
+        let desc = unsafe {
+            ctx.mapper
+                .with_page_table(table_pa, |pgtable| Self::from_ptr(pgtable).get_desc(va))?
+        };
+
+        match desc.mapped_address() {
+            Some(pa) => Ok(Some((
+                pa,
+                1 << Self::Descriptor::MAP_SHIFT,
+                desc.permissions(),
+            ))),
+            None if desc.is_valid() => Err(MapError::InvalidDescriptor.into()),
+            None => Ok(None),
+        }
+    }
+}
+
+/// Translates the VA into a physical region plus an offset and permissions.
+pub fn translate<PM: PageTableMapper>(
+    pml4_table: TPA<PgTableArray<PML4Table>>,
+    va: VA,
+    mapper: &mut PM,
+) -> Result<Option<(PhysMemoryRegion, usize, PtePermissions)>> {
+    let mut walk_ctx = WalkContext {
+        mapper,
+        // Safe to not invalidate the TLB, as we are not modifying any PTEs.
+        invalidator: &NullTlbInvalidator {},
+    };
+
+    if let Some((pa, blk_sz, perms)) = PML4Table::translate(pml4_table, va, &mut walk_ctx)? {
+        debug_assert!(blk_sz.is_power_of_two());
+
+        let offset = va.value() & (blk_sz - 1);
+
+        Ok(Some((PhysMemoryRegion::new(pa, blk_sz), offset, perms)))
+    } else {
+        Ok(None)
+    }
 }
 
 #[cfg(test)]
