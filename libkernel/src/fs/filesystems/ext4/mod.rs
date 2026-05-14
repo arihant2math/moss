@@ -454,6 +454,89 @@ where
             return Err(KernelError::Fs(FsError::CrossDevice));
         }
         let fs = self.fs_ref.upgrade().unwrap();
+        let same_parent = old_parent.id().inode_id() == self.id().inode_id();
+
+        if same_parent {
+            let mut inner = self.inner.lock().await;
+            let inner_dir = match &mut *inner {
+                InodeInner::Directory(d) => d,
+                _ => return Err(KernelError::NotSupported),
+            };
+
+            // Source and destination are in the same directory. Reuse the same
+            // directory handle so we don't try to lock this inode twice.
+            let mut child_inode = inner_dir
+                .get_entry(
+                    DirEntryName::try_from(old_name)
+                        .map_err(|_| KernelError::Fs(FsError::InvalidInput))?,
+                )
+                .await?;
+
+            let dst_lookup = inner_dir
+                .get_entry(
+                    DirEntryName::try_from(new_name)
+                        .map_err(|_| KernelError::Fs(FsError::InvalidInput))?,
+                )
+                .await;
+
+            if no_replace && dst_lookup.is_ok() {
+                return Err(KernelError::Fs(FsError::AlreadyExists));
+            }
+
+            if let Ok(target_inode) = dst_lookup {
+                let target_kind = target_inode.file_type();
+                let source_kind = child_inode.file_type();
+
+                if target_kind == ext4plus::FileType::Directory {
+                    let target_is_empty = fs
+                        .inner
+                        .read_dir(&self.path.join(new_name))
+                        .await?
+                        .all(|e| {
+                            let Ok(entry) = e else {
+                                // If we fail to read the directory, be conservative and treat it as non-empty.
+                                return false;
+                            };
+                            let name = entry.file_name().as_str().unwrap();
+                            name == "." || name == ".."
+                        })
+                        .await;
+
+                    if !target_is_empty {
+                        return Err(KernelError::Fs(FsError::DirectoryNotEmpty));
+                    }
+                    if source_kind != ext4plus::FileType::Directory {
+                        return Err(KernelError::Fs(FsError::IsADirectory));
+                    }
+                } else if source_kind == ext4plus::FileType::Directory {
+                    // Can't replace non-directory with a directory.
+                    return Err(KernelError::Fs(FsError::NotADirectory));
+                }
+
+                // Overwrite: remove destination entry first.
+                inner_dir
+                    .unlink(
+                        DirEntryName::try_from(new_name)
+                            .map_err(|_| KernelError::Fs(FsError::InvalidInput))?,
+                        target_inode,
+                    )
+                    .await?;
+            }
+
+            inner_dir
+                .link(
+                    DirEntryName::try_from(new_name.as_bytes()).unwrap(),
+                    &mut child_inode,
+                )
+                .await?;
+            inner_dir
+                .unlink(
+                    DirEntryName::try_from(old_name.as_bytes()).unwrap(),
+                    child_inode,
+                )
+                .await?;
+            return Ok(());
+        }
 
         let old_parent_inode = old_parent
             .as_any()
