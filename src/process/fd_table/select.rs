@@ -1,5 +1,10 @@
 use alloc::{boxed::Box, vec::Vec};
-use core::{future::poll_fn, iter, pin::pin, task::Poll};
+use core::{
+    future::{Future, poll_fn},
+    iter,
+    pin::{Pin, pin},
+    task::Poll,
+};
 use libkernel::{
     error::{KernelError, Result},
     memory::address::TUA,
@@ -278,47 +283,139 @@ pub async fn sys_ppoll(
     ufds: TUA<PollFd>,
     nfds: u32,
     timeout: TUA<TimeSpec>,
-    _sigmask: TUA<SigSet>,
-    _sigset_len: usize,
+    sigmask: TUA<SigSet>,
+    sigset_len: usize,
 ) -> Result<usize> {
+    struct PendingPoll {
+        idx: usize,
+        requested: PollFlags,
+        fut: Pin<Box<dyn Future<Output = Result<PollFlags>> + Send>>,
+    }
+
+    fn requested_poll_mask(events: PollFlags) -> PollFlags {
+        let mut mask = PollFlags::empty();
+
+        if events.intersects(PollFlags::POLLIN | PollFlags::POLLRDNORM) {
+            mask.insert(PollFlags::POLLIN);
+        }
+
+        if events.intersects(PollFlags::POLLOUT | PollFlags::POLLWRNORM) {
+            mask.insert(PollFlags::POLLOUT);
+        }
+
+        mask
+    }
+
+    fn returned_poll_mask(requested: PollFlags, ready: PollFlags) -> PollFlags {
+        let mut revents = ready
+            & !(PollFlags::POLLIN
+                | PollFlags::POLLRDNORM
+                | PollFlags::POLLOUT
+                | PollFlags::POLLWRNORM);
+
+        if ready.contains(PollFlags::POLLIN) {
+            if requested.contains(PollFlags::POLLIN) {
+                revents.insert(PollFlags::POLLIN);
+            }
+            if requested.contains(PollFlags::POLLRDNORM) {
+                revents.insert(PollFlags::POLLRDNORM);
+            }
+            if !requested.intersects(PollFlags::POLLIN | PollFlags::POLLRDNORM) {
+                revents.insert(PollFlags::POLLIN);
+            }
+        }
+
+        if ready.contains(PollFlags::POLLOUT) {
+            if requested.contains(PollFlags::POLLOUT) {
+                revents.insert(PollFlags::POLLOUT);
+            }
+            if requested.contains(PollFlags::POLLWRNORM) {
+                revents.insert(PollFlags::POLLWRNORM);
+            }
+            if !requested.intersects(PollFlags::POLLOUT | PollFlags::POLLWRNORM) {
+                revents.insert(PollFlags::POLLOUT);
+            }
+        }
+
+        revents
+    }
+
     let task = ctx.shared();
 
+    let mask = if sigmask.is_null() {
+        None
+    } else {
+        if sigset_len != core::mem::size_of::<SigSet>() {
+            return Err(KernelError::InvalidValue);
+        }
+
+        Some(copy_from_user(sigmask).await?)
+    };
+    let has_mask = mask.is_some();
+
     let mut poll_fds = copy_obj_array_from_user(ufds, nfds as _).await?;
+    for poll_fd in &mut poll_fds {
+        poll_fd.revents = PollFlags::empty();
+    }
 
     let mut timeout_fut = if timeout.is_null() {
         None
     } else {
-        let duration = copy_from_user(timeout).await?.into();
+        let duration = TimeSpec::copy_from_user(timeout).await?.into();
         Some(pin!(sleep(duration)))
     };
 
-    let fds = {
-        let fd_table = task.fd_table.lock_save_irq();
+    let mut futs = Vec::<PendingPoll>::new();
 
-        poll_fds
-            .iter()
-            .map(|poll_fd| fd_table.get(poll_fd.fd).ok_or(KernelError::BadFd))
-            .collect::<Result<Vec<_>>>()?
-    };
+    for idx in 0..poll_fds.len() {
+        let fd = poll_fds[idx].fd;
+        let events = poll_fds[idx].events;
 
-    let mut futs = Vec::new();
+        if fd.as_raw() < 0 {
+            continue;
+        }
 
-    for (poll_fd, open_file) in poll_fds.iter_mut().zip(fds) {
-        let poll_fut = open_file.poll(poll_fd.events).await;
+        let Some(open_file) = task.fd_table.lock_save_irq().get(fd) else {
+            poll_fds[idx].revents = PollFlags::POLLNVAL;
+            continue;
+        };
 
-        futs.push(Box::pin(async {
-            poll_fd.revents = poll_fut.await?;
+        let wait_mask = requested_poll_mask(events);
+        if wait_mask.is_empty() {
+            continue;
+        }
 
-            Ok(())
-        }));
+        let poll_fut = open_file.poll(wait_mask).await;
+        futs.push(PendingPoll {
+            idx,
+            requested: events,
+            fut: Box::pin(poll_fut) as Pin<Box<dyn Future<Output = Result<PollFlags>> + Send>>,
+        });
     }
 
-    let num_ready = poll_fn(|cx| {
-        let mut num_ready = 0;
+    let immediately_ready = poll_fds
+        .iter()
+        .filter(|poll_fd| !poll_fd.revents.is_empty())
+        .count();
 
-        for fut in futs.iter_mut() {
-            match fut.as_mut().poll(cx) {
-                Poll::Ready(Ok(())) => num_ready += 1,
+    let old_sigmask = task.sig_mask.load();
+    if let Some(mut mask) = mask {
+        mask.remove(SigSet::UNMASKABLE_SIGNALS);
+        task.sig_mask.store(mask);
+    }
+
+    let num_ready_result = poll_fn(|cx| {
+        let mut num_ready = immediately_ready;
+
+        for pending in futs.iter_mut() {
+            match pending.fut.as_mut().poll(cx) {
+                Poll::Ready(Ok(revents)) => {
+                    let revents = returned_poll_mask(pending.requested, revents);
+                    poll_fds[pending.idx].revents = revents;
+                    if !revents.is_empty() {
+                        num_ready += 1;
+                    }
+                }
                 Poll::Ready(Err(e)) => return Poll::Ready(Err::<_, KernelError>(e)),
                 Poll::Pending => continue,
             }
@@ -334,10 +431,15 @@ pub async fn sys_ppoll(
             Poll::Ready(Ok(num_ready))
         }
     })
-    .await?;
+    .await;
 
     drop(futs);
 
+    if has_mask {
+        task.sig_mask.store(old_sigmask);
+    }
+
+    let num_ready = num_ready_result?;
     copy_objs_to_user(&poll_fds, ufds).await?;
 
     Ok(num_ready)
