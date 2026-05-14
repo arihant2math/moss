@@ -1,6 +1,6 @@
 use crate::register_test;
-use libc::{accept, bind, connect, listen, shutdown, socket};
 use libc::{AF_INET, AF_UNIX, SOCK_DGRAM, SOCK_STREAM};
+use libc::{accept, bind, connect, listen, shutdown, socket};
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, TcpListener};
 use std::ptr;
@@ -1007,6 +1007,29 @@ pub fn test_socket_options() {
 
     unsafe {
         libc::close(fd);
+    }
+
+    let udp_fd = unsafe { socket(AF_INET, SOCK_DGRAM, 0) };
+    assert!(
+        udp_fd >= 0,
+        "udp socket failed: {}",
+        std::io::Error::last_os_error()
+    );
+
+    let ret = unsafe {
+        libc::setsockopt(
+            udp_fd,
+            libc::SOL_IP,
+            libc::IP_RECVERR,
+            &one as *const _ as *const libc::c_void,
+            std::mem::size_of_val(&one) as libc::socklen_t,
+        )
+    };
+    assert_eq!(ret, 0, "setsockopt IP_RECVERR failed");
+    assert_eq!(getsockopt_int(udp_fd, libc::SOL_IP, libc::IP_RECVERR), 1);
+
+    unsafe {
+        libc::close(udp_fd);
     }
 }
 

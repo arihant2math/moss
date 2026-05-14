@@ -25,6 +25,7 @@ pub const SO_PROTOCOL: i32 = 38;
 pub const SO_DOMAIN: i32 = 39;
 
 pub const IP_TTL: i32 = 2;
+pub const IP_RECVERR: i32 = 11;
 
 pub const TCP_NODELAY: i32 = 1;
 
@@ -96,6 +97,10 @@ pub struct SocketOptionState {
     linger: SocketLinger,
     tcp_nodelay: bool,
     ip_ttl: i32,
+    // Linux-compatible compatibility flag for IPv4 extended error delivery.
+    // We persist the option value even though MSG_ERRQUEUE delivery is not
+    // implemented yet.
+    ip_recverr: bool,
 }
 
 impl SocketOptionState {
@@ -122,6 +127,7 @@ impl SocketOptionState {
             },
             tcp_nodelay: false,
             ip_ttl: DEFAULT_IP_TTL,
+            ip_recverr: false,
         }
     }
 }
@@ -280,6 +286,11 @@ pub async fn set_sockopt(
                     state.lock_save_irq().ip_ttl = value;
                     Ok(())
                 }
+                IP_RECVERR => {
+                    let value = read_sockopt_int(optval, optlen).await? != 0;
+                    state.lock_save_irq().ip_recverr = value;
+                    Ok(())
+                }
                 _ => Err(KernelError::InvalidValue),
             }
         }
@@ -353,6 +364,9 @@ pub async fn get_sockopt(
 
             match optname {
                 IP_TTL => write_sockopt_value(optval, optlen, &state.ip_ttl).await,
+                IP_RECVERR => {
+                    write_sockopt_value(optval, optlen, &bool_as_int(state.ip_recverr)).await
+                }
                 _ => Err(KernelError::InvalidValue),
             }
         }
