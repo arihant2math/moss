@@ -395,6 +395,22 @@ impl SocketOps for TcpSocket {
         Ok(sent)
     }
 
+    async fn getsockname(&self) -> Result<SockAddr, KernelError> {
+        if let Some(endpoint) = with_net_core(|core| {
+            core.sockets
+                .get::<smol_tcp::Socket>(self.handle)
+                .local_endpoint()
+        })? {
+            return Ok(SockAddr::from(endpoint));
+        }
+
+        let endpoint = (*self.local_endpoint.lock_save_irq()).unwrap_or(IpListenEndpoint {
+            addr: None,
+            port: 0,
+        });
+        Ok(SockAddr::from(endpoint))
+    }
+
     async fn shutdown(&self, how: ShutdownHow) -> Result<(), KernelError> {
         match how {
             ShutdownHow::Read => {

@@ -507,6 +507,17 @@ impl From<IpEndpoint> for SockAddr {
     }
 }
 
+impl From<IpListenEndpoint> for SockAddr {
+    fn from(endpoint: IpListenEndpoint) -> SockAddr {
+        SockAddr::from(IpEndpoint {
+            addr: endpoint
+                .addr
+                .unwrap_or(IpAddress::Ipv4(Ipv4Addr::UNSPECIFIED)),
+            port: endpoint.port,
+        })
+    }
+}
+
 pub async fn parse_sockaddr(uaddr: UA, len: SocketLen) -> Result<SockAddr, KernelError> {
     use crate::memory::uaccess::try_copy_from_user;
     use libkernel::memory::address::TUA;

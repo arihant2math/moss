@@ -98,6 +98,10 @@ pub trait SocketOps: Send + Sync {
         Err(KernelError::NotSupported)
     }
 
+    async fn getsockname(&self) -> libkernel::error::Result<SockAddr> {
+        Err(KernelError::NotSupported)
+    }
+
     async fn shutdown(&self, _how: ShutdownHow) -> libkernel::error::Result<()> {
         Err(KernelError::NotSupported)
     }

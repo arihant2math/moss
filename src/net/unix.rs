@@ -562,6 +562,15 @@ impl SocketOps for UnixSocket {
         peer_inbox.send_buf(local_addr, buf).await
     }
 
+    async fn getsockname(&self) -> Result<SockAddr> {
+        Ok(SockAddr::Un((*self.local_addr.lock_save_irq()).unwrap_or(
+            SockAddrUn {
+                family: crate::net::AF_UNIX as u16,
+                path: [0; 108],
+            },
+        )))
+    }
+
     async fn shutdown(&self, how: crate::net::ShutdownHow) -> Result<()> {
         match how {
             crate::net::ShutdownHow::Read => {

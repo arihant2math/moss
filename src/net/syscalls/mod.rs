@@ -1,6 +1,7 @@
 pub mod accept;
 pub mod bind;
 pub mod connect;
+pub mod getsockname;
 pub mod getsockopt;
 pub mod listen;
 pub mod msg;

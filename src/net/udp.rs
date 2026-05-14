@@ -334,6 +334,17 @@ impl SocketOps for UdpSocket {
         Ok(buf.len())
     }
 
+    async fn getsockname(&self) -> Result<SockAddr, KernelError> {
+        let mut endpoint = (*self.local_endpoint.lock_save_irq()).unwrap_or(IpListenEndpoint {
+            addr: None,
+            port: 0,
+        });
+        if let Some(peer) = self.connected_peer() {
+            endpoint.addr = infer_local_ip_for_peer(endpoint.addr, peer);
+        }
+        Ok(SockAddr::from(endpoint))
+    }
+
     async fn shutdown(&self, how: ShutdownHow) -> Result<(), KernelError> {
         match how {
             ShutdownHow::Read => *self.rd_shutdown.lock_save_irq() = true,
