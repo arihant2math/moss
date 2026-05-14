@@ -4,7 +4,7 @@ use super::pidfd::{PidFile, PidfdFlags};
 use super::ptrace::{PTrace, TracePoint, ptrace_stop};
 use super::thread_group::ThreadGroup;
 use super::{
-    ITimers, Tid,
+    ITimers, Tid, VmHandle,
     ctx::Context,
     thread_group::signal::{AtomicSigSet, SigId, SigSet},
 };
@@ -322,11 +322,14 @@ async fn do_clone(ctx: &ProcessCtx, req: CloneRequest) -> Result<usize> {
     };
 
     let vm = if req.flags.contains(CloneFlags::CLONE_VM) {
-        current_task.vm.clone()
+        if req.flags.contains(CloneFlags::CLONE_THREAD) {
+            current_task.vm.clone()
+        } else {
+            Arc::new(VmHandle::from_shared(current_task.vm.shared_vm()))
+        }
     } else {
-        Arc::new(SpinLock::new(
-            current_task.vm.shared_vm().lock_save_irq().clone_as_cow()?,
-        ))
+        let proc_vm = current_task.vm.shared_vm();
+        Arc::new(VmHandle::new(proc_vm.lock_save_irq().clone_as_cow()?))
     };
 
     let files = if req.flags.contains(CloneFlags::CLONE_FILES) {
@@ -394,7 +397,7 @@ async fn do_clone(ctx: &ProcessCtx, req: CloneRequest) -> Result<usize> {
         in_syscall: false,
     };
 
-    if flags.contains(CloneFlags::CLONE_VFORK) {
+    if req.flags.contains(CloneFlags::CLONE_VFORK) {
         new_task.process.start_vfork();
     }
 
@@ -429,7 +432,8 @@ async fn do_clone(ctx: &ProcessCtx, req: CloneRequest) -> Result<usize> {
     }
 
     let work = Work::new(Box::new(new_task));
-    let vfork_process = flags
+    let vfork_process = req
+        .flags
         .contains(CloneFlags::CLONE_VFORK)
         .then(|| work.process.clone());
 

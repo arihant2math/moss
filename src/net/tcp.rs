@@ -411,6 +411,10 @@ impl SocketOps for TcpSocket {
         Ok(SockAddr::from(endpoint))
     }
 
+    async fn getpeername(&self) -> Result<SockAddr, KernelError> {
+        self.remote_addr().ok_or(KernelError::NotConnected)
+    }
+
     async fn shutdown(&self, how: ShutdownHow) -> Result<(), KernelError> {
         match how {
             ShutdownHow::Read => {

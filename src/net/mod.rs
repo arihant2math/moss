@@ -421,25 +421,26 @@ impl SockAddr {
     pub fn len(&self) -> SocketLen {
         match self {
             SockAddr::In(_) => size_of::<SockAddrIn>(),
-            SockAddr::Un(_) => size_of::<SockAddrUn>(),
+            SockAddr::Un(saun) => {
+                let path_len = saun
+                    .path
+                    .iter()
+                    .position(|byte| *byte == 0)
+                    .map(|len| len + size_of::<u16>() + usize::from(len != 0))
+                    .unwrap_or(size_of::<SockAddrUn>());
+                path_len.max(size_of::<u16>())
+            }
         }
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
+        let len = self.len();
         match self {
             SockAddr::In(sain) => unsafe {
-                core::slice::from_raw_parts(
-                    (sain as *const SockAddrIn).cast::<u8>(),
-                    size_of::<SockAddrIn>(),
-                )
-                .to_vec()
+                core::slice::from_raw_parts((sain as *const SockAddrIn).cast::<u8>(), len).to_vec()
             },
             SockAddr::Un(saun) => unsafe {
-                core::slice::from_raw_parts(
-                    (saun as *const SockAddrUn).cast::<u8>(),
-                    size_of::<SockAddrUn>(),
-                )
-                .to_vec()
+                core::slice::from_raw_parts((saun as *const SockAddrUn).cast::<u8>(), len).to_vec()
             },
         }
     }
@@ -538,7 +539,7 @@ pub async fn parse_sockaddr(uaddr: UA, len: SocketLen) -> Result<SockAddr, Kerne
             Ok(SockAddr::In(sain))
         }
         AF_UNIX => {
-            let path_len = len - size_of::<u16>() * 2;
+            let path_len = len - size_of::<u16>();
             if path_len > 108 {
                 return Err(KernelError::InvalidValue);
             }

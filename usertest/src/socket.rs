@@ -1,6 +1,6 @@
 use crate::register_test;
-use libc::{AF_INET, AF_UNIX, SOCK_DGRAM, SOCK_STREAM};
 use libc::{accept, bind, connect, listen, shutdown, socket};
+use libc::{AF_INET, AF_UNIX, SOCK_DGRAM, SOCK_STREAM};
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, TcpListener};
 use std::ptr;
@@ -50,6 +50,45 @@ fn getsockname_in(fd: libc::c_int) -> libc::sockaddr_in {
     );
     assert_eq!(len as usize, std::mem::size_of::<libc::sockaddr_in>());
     addr
+}
+
+fn getpeername_in(fd: libc::c_int) -> libc::sockaddr_in {
+    let mut addr: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+    let mut len = std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
+    let ret = unsafe {
+        libc::getpeername(
+            fd,
+            &mut addr as *mut libc::sockaddr_in as *mut libc::sockaddr,
+            &mut len,
+        )
+    };
+    assert_eq!(
+        ret,
+        0,
+        "getpeername failed: {}",
+        std::io::Error::last_os_error()
+    );
+    assert_eq!(len as usize, std::mem::size_of::<libc::sockaddr_in>());
+    addr
+}
+
+fn getpeername_un(fd: libc::c_int) -> (libc::sockaddr_un, libc::socklen_t) {
+    let mut addr: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    let mut len = std::mem::size_of::<libc::sockaddr_un>() as libc::socklen_t;
+    let ret = unsafe {
+        libc::getpeername(
+            fd,
+            &mut addr as *mut libc::sockaddr_un as *mut libc::sockaddr,
+            &mut len,
+        )
+    };
+    assert_eq!(
+        ret,
+        0,
+        "getpeername failed: {}",
+        std::io::Error::last_os_error()
+    );
+    (addr, len)
 }
 
 fn write_all_fd(fd: libc::c_int, buf: &[u8]) {
@@ -331,6 +370,94 @@ pub fn test_tcp_getsockname() {
 
 register_test!(test_tcp_getsockname);
 
+pub fn test_tcp_getpeername() {
+    let server_port = 22_500 + (unsafe { libc::getpid() } % 10_000) as u16;
+    let server_addr = loopback_addr(server_port);
+
+    unsafe {
+        let server_fd = socket(AF_INET, SOCK_STREAM, 0);
+        assert!(
+            server_fd >= 0,
+            "server socket creation failed: {}",
+            std::io::Error::last_os_error()
+        );
+
+        let ret = bind(
+            server_fd,
+            &server_addr as *const libc::sockaddr_in as *const libc::sockaddr,
+            std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+        );
+        assert_eq!(ret, 0, "bind failed: {}", std::io::Error::last_os_error());
+
+        let ret = listen(server_fd, 1);
+        assert_eq!(ret, 0, "listen failed: {}", std::io::Error::last_os_error());
+
+        let pid = libc::fork();
+        if pid < 0 {
+            panic!("fork failed: {}", std::io::Error::last_os_error());
+        }
+
+        if pid == 0 {
+            libc::close(server_fd);
+
+            let client_fd = socket(AF_INET, SOCK_STREAM, 0);
+            assert!(
+                client_fd >= 0,
+                "client socket creation failed: {}",
+                std::io::Error::last_os_error()
+            );
+
+            let ret = connect(
+                client_fd,
+                &server_addr as *const libc::sockaddr_in as *const libc::sockaddr,
+                std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+            );
+            assert_eq!(
+                ret,
+                0,
+                "connect failed: {}",
+                std::io::Error::last_os_error()
+            );
+
+            let peer = getpeername_in(client_fd);
+            assert_eq!(peer.sin_family as i32, AF_INET);
+            assert_eq!(peer.sin_port, server_port.to_be());
+            assert_eq!(peer.sin_addr.s_addr, u32::from_ne_bytes([127, 0, 0, 1]));
+
+            libc::close(client_fd);
+            libc::_exit(0);
+        }
+
+        let conn_fd = accept(server_fd, ptr::null_mut(), ptr::null_mut());
+        assert!(
+            conn_fd >= 0,
+            "accept failed: {}",
+            std::io::Error::last_os_error()
+        );
+
+        let peer = getpeername_in(conn_fd);
+        assert_eq!(peer.sin_family as i32, AF_INET);
+        assert_ne!(peer.sin_port, 0);
+        assert_eq!(peer.sin_addr.s_addr, u32::from_ne_bytes([127, 0, 0, 1]));
+
+        libc::close(conn_fd);
+        libc::close(server_fd);
+
+        let mut status = 0;
+        let waited = libc::waitpid(pid, &mut status, 0);
+        assert_eq!(
+            waited,
+            pid,
+            "waitpid failed: {}",
+            std::io::Error::last_os_error()
+        );
+        assert!(libc::WIFEXITED(status));
+        assert_eq!(libc::WEXITSTATUS(status), 0);
+    }
+}
+
+register_test!(test_tcp_getpeername);
+
 pub fn test_udp_getsockname() {
     let peer_port = 23_000 + (unsafe { libc::getpid() } % 10_000) as u16;
     let peer_addr = loopback_addr(peer_port);
@@ -365,6 +492,69 @@ pub fn test_udp_getsockname() {
 }
 
 register_test!(test_udp_getsockname);
+
+pub fn test_udp_getpeername() {
+    let peer_port = 23_500 + (unsafe { libc::getpid() } % 10_000) as u16;
+    let peer_addr = loopback_addr(peer_port);
+
+    unsafe {
+        let fd = socket(AF_INET, SOCK_DGRAM, 0);
+        assert!(
+            fd >= 0,
+            "udp socket creation failed: {}",
+            std::io::Error::last_os_error()
+        );
+
+        let ret = connect(
+            fd,
+            &peer_addr as *const libc::sockaddr_in as *const libc::sockaddr,
+            std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+        );
+        assert_eq!(
+            ret,
+            0,
+            "connect failed: {}",
+            std::io::Error::last_os_error()
+        );
+
+        let peer = getpeername_in(fd);
+        assert_eq!(peer.sin_family as i32, AF_INET);
+        assert_eq!(peer.sin_port, peer_port.to_be());
+        assert_eq!(peer.sin_addr.s_addr, u32::from_ne_bytes([127, 0, 0, 1]));
+
+        libc::close(fd);
+    }
+}
+
+register_test!(test_udp_getpeername);
+
+pub fn test_getpeername_not_connected() {
+    unsafe {
+        let fd = socket(AF_INET, SOCK_STREAM, 0);
+        assert!(
+            fd >= 0,
+            "socket creation failed: {}",
+            std::io::Error::last_os_error()
+        );
+
+        let mut addr: libc::sockaddr_in = std::mem::zeroed();
+        let mut len = std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
+        let ret = libc::getpeername(
+            fd,
+            &mut addr as *mut libc::sockaddr_in as *mut libc::sockaddr,
+            &mut len,
+        );
+        assert_eq!(ret, -1, "getpeername unexpectedly succeeded");
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ENOTCONN)
+        );
+
+        libc::close(fd);
+    }
+}
+
+register_test!(test_getpeername_not_connected);
 
 pub fn test_tcp_sendmsg_recvmsg() {
     let server_port = 21_000 + (unsafe { libc::getpid() } % 10_000) as u16;
@@ -985,6 +1175,90 @@ pub fn test_unix_socket_fork_msg_passing() {
 }
 
 register_test!(test_unix_socket_fork_msg_passing);
+
+pub fn test_unix_stream_getpeername() {
+    use std::ptr;
+
+    let server_fd = unsafe { socket(AF_UNIX, SOCK_STREAM, 0) };
+    assert!(server_fd >= 0, "Failed to create server UNIX socket");
+
+    let path = "/tmp/uds_getpeername_test";
+    let sockaddr = libc::sockaddr_un {
+        sun_family: AF_UNIX as u16,
+        sun_path: {
+            let mut path_array = [0u8; 108];
+            for (i, &b) in path.as_bytes().iter().enumerate() {
+                path_array[i] = b;
+            }
+            path_array
+        },
+    };
+
+    let ret = unsafe {
+        bind(
+            server_fd,
+            &sockaddr as *const libc::sockaddr_un as *const libc::sockaddr,
+            std::mem::size_of::<libc::sockaddr_un>() as u32,
+        )
+    };
+    assert_eq!(ret, 0, "Server bind failed");
+
+    let ret = unsafe { listen(server_fd, 1) };
+    assert_eq!(ret, 0, "Server listen failed");
+
+    let pid = unsafe { libc::fork() };
+    assert!(pid >= 0, "fork failed");
+
+    if pid == 0 {
+        let client_fd = unsafe { socket(AF_UNIX, SOCK_STREAM, 0) };
+        assert!(client_fd >= 0, "Client socket creation failed");
+
+        let ret = unsafe {
+            connect(
+                client_fd,
+                &sockaddr as *const libc::sockaddr_un as *const libc::sockaddr,
+                std::mem::size_of::<libc::sockaddr_un>() as u32,
+            )
+        };
+        assert_eq!(ret, 0, "Client connect failed");
+
+        let (peer, len) = getpeername_un(client_fd);
+        assert_eq!(peer.sun_family as i32, AF_UNIX);
+        assert_eq!(
+            len as usize,
+            std::mem::size_of::<libc::sa_family_t>() + path.len() + 1
+        );
+        for (i, &b) in path.as_bytes().iter().enumerate() {
+            assert_eq!(peer.sun_path[i], b);
+        }
+        assert_eq!(peer.sun_path[path.len()], 0);
+
+        unsafe {
+            libc::close(client_fd);
+            libc::_exit(0);
+        }
+    }
+
+    let conn_fd = unsafe { accept(server_fd, ptr::null_mut(), ptr::null_mut()) };
+    assert!(conn_fd >= 0, "Server accept failed");
+
+    let (peer, len) = getpeername_un(conn_fd);
+    assert_eq!(peer.sun_family as i32, AF_UNIX);
+    assert_eq!(len as usize, std::mem::size_of::<libc::sa_family_t>());
+
+    unsafe {
+        libc::close(conn_fd);
+        libc::close(server_fd);
+    }
+
+    let mut status = 0;
+    let waited = unsafe { libc::waitpid(pid, &mut status, 0) };
+    assert_eq!(waited, pid, "waitpid failed");
+    assert!(libc::WIFEXITED(status));
+    assert_eq!(libc::WEXITSTATUS(status), 0);
+}
+
+register_test!(test_unix_stream_getpeername);
 
 pub fn test_rust_unix_socket() {
     use std::os::unix::net::{UnixListener, UnixStream};

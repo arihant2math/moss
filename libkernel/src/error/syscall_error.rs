@@ -48,6 +48,7 @@ pub const ENOTEMPTY: isize = -39;
 pub const ELOOP: isize = -40;
 pub const EAFNOSUPPORT: isize = -97;
 pub const EOPNOTSUPP: isize = -95;
+pub const ENOTCONN: isize = -107;
 pub const ETIMEDOUT: isize = -110;
 
 pub fn kern_err_to_syscall(err: KernelError) -> isize {
@@ -58,6 +59,7 @@ pub fn kern_err_to_syscall(err: KernelError) -> isize {
         KernelError::TryAgain => EAGAIN,
         KernelError::BrokenPipe => EPIPE,
         KernelError::InUse => EBUSY,
+        KernelError::NotConnected => ENOTCONN,
         KernelError::NotPermitted => EPERM,
         KernelError::BufferFull | KernelError::NameTooLong => ENAMETOOLONG,
         KernelError::Fs(FsError::NotFound) => ENOENT,

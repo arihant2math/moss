@@ -345,6 +345,12 @@ impl SocketOps for UdpSocket {
         Ok(SockAddr::from(endpoint))
     }
 
+    async fn getpeername(&self) -> Result<SockAddr, KernelError> {
+        self.connected_peer()
+            .map(SockAddr::from)
+            .ok_or(KernelError::NotConnected)
+    }
+
     async fn shutdown(&self, how: ShutdownHow) -> Result<(), KernelError> {
         match how {
             ShutdownHow::Read => *self.rd_shutdown.lock_save_irq() = true,

@@ -192,6 +192,7 @@ pub struct UnixSocket {
     /// The peer endpoint's inbox
     peer_inbox: SpinLock<Option<Inbox>>,
     local_addr: SpinLock<Option<SockAddrUn>>,
+    peer_addr: SpinLock<Option<SockAddrUn>>,
     connected: SpinLock<bool>,
     listening: SpinLock<bool>,
     backlog: SpinLock<usize>,
@@ -208,6 +209,7 @@ impl UnixSocket {
             inbox: Inbox::new(socket_type),
             peer_inbox: SpinLock::new(None),
             local_addr: SpinLock::new(None),
+            peer_addr: SpinLock::new(None),
             connected: SpinLock::new(false),
             listening: SpinLock::new(false),
             backlog: SpinLock::new(0),
@@ -236,6 +238,13 @@ impl UnixSocket {
     }
     pub fn new_seqpacket() -> Self {
         Self::new(SocketType::SeqPacket)
+    }
+
+    fn unnamed_addr() -> SockAddrUn {
+        SockAddrUn {
+            family: AF_UNIX as u16,
+            path: [0; 108],
+        }
     }
 
     fn path_bytes(saun: &crate::net::SockAddrUn) -> Option<Vec<u8>> {
@@ -291,6 +300,7 @@ impl SocketOps for UnixSocket {
                 let Some(path) = UnixSocket::path_bytes(&saun) else {
                     return Err(KernelError::InvalidValue);
                 };
+                let local_addr = (*self.local_addr.lock_save_irq()).unwrap_or(Self::unnamed_addr());
                 let mut reg = endpoints().lock_save_irq();
                 let Some(ep) = reg.get_mut(&path) else {
                     return Err(KernelError::Fs(FsError::NotFound));
@@ -302,11 +312,13 @@ impl SocketOps for UnixSocket {
                     let server_sock = UnixSocket::new(SocketType::Stream);
                     // For accepted sockets, local address matches the listening path (Linux getsockname).
                     *server_sock.local_addr.lock_save_irq() = Some(saun);
+                    *server_sock.peer_addr.lock_save_irq() = Some(local_addr);
                     *server_sock.peer_inbox.lock_save_irq() = Some(self.inbox.clone());
                     *server_sock.connected.lock_save_irq() = true;
 
                     // Client links to accepted socket inbox.
                     *self.peer_inbox.lock_save_irq() = Some(server_sock.inbox.clone());
+                    *self.peer_addr.lock_save_irq() = Some(saun);
                     *self.connected.lock_save_irq() = true;
 
                     ep.pending.push(server_sock);
@@ -318,6 +330,7 @@ impl SocketOps for UnixSocket {
                 } else {
                     // Non-listening endpoint: treat as datagram or pre-bound stream endpoint
                     *self.peer_inbox.lock_save_irq() = Some(ep.inbox.clone());
+                    *self.peer_addr.lock_save_irq() = Some(saun);
                     *self.connected.lock_save_irq() = true;
                     Ok(())
                 }
@@ -384,15 +397,9 @@ impl SocketOps for UnixSocket {
         })
         .await?;
 
-        // Best-effort peer address. For now we return our own bound path when available.
-        // (Linux often returns unnamed for AF_UNIX unless the peer is bound.)
-        let peer_addr = {
-            let guard = sock.local_addr.lock_save_irq();
-            let Some(saun) = &*guard else {
-                return Err(KernelError::InvalidValue);
-            };
-            SockAddr::Un(*saun)
-        };
+        let peer_addr = (*sock.peer_addr.lock_save_irq())
+            .map(SockAddr::Un)
+            .ok_or(KernelError::NotConnected)?;
 
         Ok((Box::new(sock), peer_addr))
     }
@@ -471,12 +478,10 @@ impl SocketOps for UnixSocket {
         let Some(peer) = self.peer_inbox.lock_save_irq().clone() else {
             return Err(KernelError::InvalidValue);
         };
-        let local_addr = {
-            self.local_addr.lock_save_irq().unwrap_or(SockAddrUn {
-                family: crate::net::AF_UNIX as u16,
-                path: [0; 108],
-            })
-        };
+        let local_addr = self
+            .local_addr
+            .lock_save_irq()
+            .unwrap_or(Self::unnamed_addr());
         peer.send(local_addr, buf, count).await
     }
 
@@ -501,12 +506,10 @@ impl SocketOps for UnixSocket {
             }
             _ => return Err(KernelError::InvalidValue),
         };
-        let local_addr = {
-            self.local_addr.lock_save_irq().unwrap_or(SockAddrUn {
-                family: crate::net::AF_UNIX as u16,
-                path: [0; 108],
-            })
-        };
+        let local_addr = self
+            .local_addr
+            .lock_save_irq()
+            .unwrap_or(Self::unnamed_addr());
         peer_inbox.send(local_addr, buf, count).await
     }
 
@@ -524,12 +527,10 @@ impl SocketOps for UnixSocket {
             return Err(KernelError::BrokenPipe);
         }
 
-        let local_addr = {
-            self.local_addr.lock_save_irq().unwrap_or(SockAddrUn {
-                family: crate::net::AF_UNIX as u16,
-                path: [0; 108],
-            })
-        };
+        let local_addr = self
+            .local_addr
+            .lock_save_irq()
+            .unwrap_or(Self::unnamed_addr());
 
         let peer_inbox = match addr {
             Some(SockAddr::Un(saun)) => {
@@ -563,12 +564,15 @@ impl SocketOps for UnixSocket {
     }
 
     async fn getsockname(&self) -> Result<SockAddr> {
-        Ok(SockAddr::Un((*self.local_addr.lock_save_irq()).unwrap_or(
-            SockAddrUn {
-                family: crate::net::AF_UNIX as u16,
-                path: [0; 108],
-            },
-        )))
+        Ok(SockAddr::Un(
+            (*self.local_addr.lock_save_irq()).unwrap_or(Self::unnamed_addr()),
+        ))
+    }
+
+    async fn getpeername(&self) -> Result<SockAddr> {
+        (*self.peer_addr.lock_save_irq())
+            .map(SockAddr::Un)
+            .ok_or(KernelError::NotConnected)
     }
 
     async fn shutdown(&self, how: crate::net::ShutdownHow) -> Result<()> {

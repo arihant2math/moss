@@ -293,6 +293,10 @@ pub enum KernelError {
     #[error("Not a socket")]
     NotASocket,
 
+    /// Socket is not connected.
+    #[error("Socket is not connected")]
+    NotConnected,
+
     /// Other error with a static description.
     #[error("{0}")]
     Other(&'static str),

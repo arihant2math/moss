@@ -63,6 +63,7 @@ use crate::{
         accept::{sys_accept, sys_accept4},
         bind::sys_bind,
         connect::sys_connect,
+        getpeername::sys_getpeername,
         getsockname::sys_getsockname,
         getsockopt::sys_getsockopt,
         listen::sys_listen,
@@ -656,6 +657,15 @@ pub async fn handle_syscall(mut ctx: ProcessCtx) {
         0xcb => sys_connect(&ctx, arg1.into(), UA::from_value(arg2 as _), arg3 as _).await,
         0xcc => {
             sys_getsockname(
+                &ctx,
+                arg1.into(),
+                UA::from_value(arg2 as _),
+                TUA::from_value(arg3 as _),
+            )
+            .await
+        }
+        0xcd => {
+            sys_getpeername(
                 &ctx,
                 arg1.into(),
                 UA::from_value(arg2 as _),
