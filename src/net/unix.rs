@@ -91,6 +91,43 @@ impl Inbox {
         }
     }
 
+    async fn send_buf(&self, origin: SockAddrUn, buf: &[u8]) -> Result<usize> {
+        match self {
+            Inbox::Pipe(pipe) => Ok(pipe.push_slice(buf).await),
+            Inbox::Datagram(queue) => {
+                let msg = Message {
+                    sender: origin,
+                    data: buf.to_vec(),
+                };
+                let waiters = {
+                    let mut inbox = queue.lock_save_irq();
+                    inbox.queue.push_back(msg);
+                    core::mem::take(&mut inbox.waiters)
+                };
+                for waiter in waiters {
+                    waiter.wake();
+                }
+                Ok(buf.len())
+            }
+        }
+    }
+
+    async fn recv_buf(&self, buf: &mut [u8]) -> Result<(usize, Option<SockAddrUn>)> {
+        match self {
+            Inbox::Pipe(pipe) => Ok((pipe.pop_slice(buf).await, None)),
+            Inbox::Datagram(queue) => {
+                let msg = queue.lock_save_irq().queue.pop_front();
+                if let Some(msg) = msg {
+                    let n = msg.data.len().min(buf.len());
+                    buf[..n].copy_from_slice(&msg.data[..n]);
+                    Ok((n, Some(msg.sender)))
+                } else {
+                    Ok((0, None))
+                }
+            }
+        }
+    }
+
     fn poll_read_ready(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send>> {
         match self.clone() {
             Inbox::Pipe(pipe) => Box::pin(async move {
@@ -391,6 +428,25 @@ impl SocketOps for UnixSocket {
         Ok(n)
     }
 
+    async fn recvfrom_buf(
+        &mut self,
+        _ctx: &mut FileCtx,
+        buf: &mut [u8],
+        _flags: RecvFlags,
+        _addr: Option<SockAddr>,
+    ) -> Result<(usize, Option<SockAddr>)> {
+        if buf.is_empty() {
+            return Ok((0, None));
+        }
+        if *self.rd_shutdown.lock_save_irq() {
+            return Ok((0, None));
+        }
+        self.inbox.recv_buf(buf).await.map(|(n, peer)| {
+            let peer_addr = peer.map(SockAddr::Un);
+            (n, peer_addr)
+        })
+    }
+
     async fn send(
         &mut self,
         _ctx: &mut FileCtx,
@@ -452,6 +508,58 @@ impl SocketOps for UnixSocket {
             })
         };
         peer_inbox.send(local_addr, buf, count).await
+    }
+
+    async fn sendto_buf(
+        &mut self,
+        _ctx: &mut FileCtx,
+        buf: &[u8],
+        _flags: SendFlags,
+        addr: Option<SockAddr>,
+    ) -> Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        if *self.wr_shutdown.lock_save_irq() {
+            return Err(KernelError::BrokenPipe);
+        }
+
+        let local_addr = {
+            self.local_addr.lock_save_irq().unwrap_or(SockAddrUn {
+                family: crate::net::AF_UNIX as u16,
+                path: [0; 108],
+            })
+        };
+
+        let peer_inbox = match addr {
+            Some(SockAddr::Un(saun)) => {
+                let Some(path) = UnixSocket::path_bytes(&saun) else {
+                    return Err(KernelError::InvalidValue);
+                };
+                let reg = endpoints().lock_save_irq();
+                let Some(ep) = reg.get(&path) else {
+                    return Err(KernelError::Fs(FsError::NotFound));
+                };
+                ep.inbox.clone()
+            }
+            Some(_) => return Err(KernelError::InvalidValue),
+            None => {
+                match self.socket_type {
+                    SocketType::Stream | SocketType::SeqPacket => {
+                        if !*self.connected.lock_save_irq() {
+                            return Err(KernelError::InvalidValue);
+                        }
+                    }
+                    SocketType::Datagram => {}
+                }
+                self.peer_inbox
+                    .lock_save_irq()
+                    .clone()
+                    .ok_or(KernelError::InvalidValue)?
+            }
+        };
+
+        peer_inbox.send_buf(local_addr, buf).await
     }
 
     async fn shutdown(&self, how: crate::net::ShutdownHow) -> Result<()> {

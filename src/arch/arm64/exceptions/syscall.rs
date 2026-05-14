@@ -63,6 +63,7 @@ use crate::{
         connect::sys_connect,
         getsockopt::sys_getsockopt,
         listen::sys_listen,
+        msg::{sys_recvmsg, sys_sendmsg},
         recv::sys_recvfrom,
         send::sys_sendto,
         setsockopt::sys_setsockopt,
@@ -694,6 +695,8 @@ pub async fn handle_syscall(mut ctx: ProcessCtx) {
             .await
         }
         0xd2 => sys_shutdown(&ctx, arg1.into(), arg2 as _).await,
+        0xd3 => sys_sendmsg(&ctx, arg1.into(), TUA::from_value(arg2 as _), arg3 as _).await,
+        0xd4 => sys_recvmsg(&ctx, arg1.into(), TUA::from_value(arg2 as _), arg3 as _).await,
         0xd6 => sys_brk(&ctx, VA::from_value(arg1 as _))
             .await
             .map_err(|e| match e {}),

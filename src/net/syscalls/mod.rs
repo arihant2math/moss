@@ -3,6 +3,7 @@ pub mod bind;
 pub mod connect;
 pub mod getsockopt;
 pub mod listen;
+pub mod msg;
 pub mod recv;
 pub mod send;
 pub mod setsockopt;

@@ -48,7 +48,7 @@ pub async fn sys_sendto(
     let socket = ops
         .as_socket()
         .ok_or(libkernel::error::KernelError::NotASocket)?;
-    let flags = SendFlags::from_bits(flags as u32).unwrap_or(SendFlags::empty());
+    let flags = SendFlags::from_bits_truncate(flags as u32);
     if addr.is_null() || addrlen == 0 {
         // No destination address, use connected peer
         return socket.send(ctx, buf, len, flags).await;

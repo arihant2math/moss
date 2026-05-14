@@ -269,6 +269,44 @@ impl SocketOps for TcpSocket {
         self.recv(ctx, buf, count, flags).await
     }
 
+    async fn recvfrom_buf(
+        &mut self,
+        _ctx: &mut FileCtx,
+        buf: &mut [u8],
+        flags: RecvFlags,
+        _addr: Option<SockAddr>,
+    ) -> Result<(usize, Option<SockAddr>), KernelError> {
+        if buf.is_empty() || *self.rd_shutdown.lock_save_irq() {
+            return Ok((0, self.remote_addr()));
+        }
+
+        let peer = self.remote_addr();
+        let nonblock = flags.contains(RecvFlags::MSG_DONTWAIT);
+        let data = self
+            .wait_until(nonblock, || {
+                with_net_core(|core| {
+                    let socket = core.sockets.get_mut::<smol_tcp::Socket>(self.handle);
+                    if socket.can_recv() {
+                        let mut data = vec![0u8; buf.len()];
+                        let len = socket
+                            .recv_slice(&mut data)
+                            .map_err(|_| KernelError::InvalidValue)?;
+                        data.truncate(len);
+                        Ok(Some(data))
+                    } else if !socket.may_recv() {
+                        Ok(Some(Vec::new()))
+                    } else {
+                        Ok(None)
+                    }
+                })?
+            })
+            .await?;
+
+        let len = data.len();
+        buf[..len].copy_from_slice(&data);
+        Ok((len, peer))
+    }
+
     async fn send(
         &mut self,
         _ctx: &mut FileCtx,
@@ -318,6 +356,43 @@ impl SocketOps for TcpSocket {
         _addr: SockAddr,
     ) -> Result<usize, KernelError> {
         self.send(ctx, buf, count, flags).await
+    }
+
+    async fn sendto_buf(
+        &mut self,
+        _ctx: &mut FileCtx,
+        buf: &[u8],
+        flags: SendFlags,
+        _addr: Option<SockAddr>,
+    ) -> Result<usize, KernelError> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        if *self.wr_shutdown.lock_save_irq() {
+            return Err(KernelError::BrokenPipe);
+        }
+
+        let nonblock = flags.contains(SendFlags::MSG_DONT_WAIT);
+        let sent = self
+            .wait_until(nonblock, || {
+                with_net_core(|core| {
+                    let socket = core.sockets.get_mut::<smol_tcp::Socket>(self.handle);
+                    if socket.can_send() {
+                        let len = socket
+                            .send_slice(buf)
+                            .map_err(|_| KernelError::BrokenPipe)?;
+                        Ok(Some(len))
+                    } else if !socket.may_send() {
+                        Err(KernelError::BrokenPipe)
+                    } else {
+                        Ok(None)
+                    }
+                })?
+            })
+            .await?;
+
+        process_packets();
+        Ok(sent)
     }
 
     async fn shutdown(&self, how: ShutdownHow) -> Result<(), KernelError> {

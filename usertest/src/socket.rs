@@ -218,6 +218,287 @@ pub fn test_tcp_client_server() {
 
 register_test!(test_tcp_client_server);
 
+pub fn test_tcp_sendmsg_recvmsg() {
+    let server_port = 21_000 + (unsafe { libc::getpid() } % 10_000) as u16;
+    let server_addr = loopback_addr(server_port);
+
+    unsafe {
+        let server_fd = socket(AF_INET, SOCK_STREAM, 0);
+        assert!(
+            server_fd >= 0,
+            "server socket creation failed: {}",
+            std::io::Error::last_os_error()
+        );
+
+        let ret = bind(
+            server_fd,
+            &server_addr as *const libc::sockaddr_in as *const libc::sockaddr,
+            std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+        );
+        assert_eq!(ret, 0, "bind failed: {}", std::io::Error::last_os_error());
+
+        let ret = listen(server_fd, 1);
+        assert_eq!(ret, 0, "listen failed: {}", std::io::Error::last_os_error());
+
+        let pid = libc::fork();
+        if pid < 0 {
+            panic!("fork failed: {}", std::io::Error::last_os_error());
+        }
+
+        if pid == 0 {
+            libc::close(server_fd);
+
+            let client_fd = socket(AF_INET, SOCK_STREAM, 0);
+            assert!(
+                client_fd >= 0,
+                "client socket creation failed: {}",
+                std::io::Error::last_os_error()
+            );
+
+            let ret = connect(
+                client_fd,
+                &server_addr as *const libc::sockaddr_in as *const libc::sockaddr,
+                std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+            );
+            assert_eq!(
+                ret,
+                0,
+                "connect failed: {}",
+                std::io::Error::last_os_error()
+            );
+
+            let part1 = b"hel";
+            let part2 = b"lo";
+            let mut send_iov = [
+                libc::iovec {
+                    iov_base: part1.as_ptr() as *mut libc::c_void,
+                    iov_len: part1.len(),
+                },
+                libc::iovec {
+                    iov_base: part2.as_ptr() as *mut libc::c_void,
+                    iov_len: part2.len(),
+                },
+            ];
+            let mut send_msg: libc::msghdr = std::mem::zeroed();
+            send_msg.msg_iov = send_iov.as_mut_ptr();
+            send_msg.msg_iovlen = send_iov.len() as _;
+
+            let sent = libc::sendmsg(client_fd, &send_msg, 0);
+            assert_eq!(
+                sent,
+                5,
+                "sendmsg failed: {}",
+                std::io::Error::last_os_error()
+            );
+
+            let mut left = [0u8; 2];
+            let mut right = [0u8; 3];
+            let mut recv_iov = [
+                libc::iovec {
+                    iov_base: left.as_mut_ptr().cast(),
+                    iov_len: left.len(),
+                },
+                libc::iovec {
+                    iov_base: right.as_mut_ptr().cast(),
+                    iov_len: right.len(),
+                },
+            ];
+            let mut peer_addr: libc::sockaddr_in = std::mem::zeroed();
+            let mut recv_msg: libc::msghdr = std::mem::zeroed();
+            recv_msg.msg_name = (&mut peer_addr as *mut libc::sockaddr_in).cast();
+            recv_msg.msg_namelen = std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
+            recv_msg.msg_iov = recv_iov.as_mut_ptr();
+            recv_msg.msg_iovlen = recv_iov.len() as _;
+
+            let recvd = libc::recvmsg(client_fd, &mut recv_msg, 0);
+            assert_eq!(
+                recvd,
+                5,
+                "recvmsg failed: {}",
+                std::io::Error::last_os_error()
+            );
+            assert_eq!(&left, b"wo");
+            assert_eq!(&right, b"rld");
+            assert_eq!(
+                recv_msg.msg_namelen as usize,
+                std::mem::size_of::<libc::sockaddr_in>()
+            );
+            assert_eq!(peer_addr.sin_family as i32, AF_INET);
+
+            libc::close(client_fd);
+            libc::_exit(0);
+        }
+
+        let conn_fd = accept(server_fd, ptr::null_mut(), ptr::null_mut());
+        assert!(
+            conn_fd >= 0,
+            "accept failed: {}",
+            std::io::Error::last_os_error()
+        );
+
+        let mut left = [0u8; 1];
+        let mut right = [0u8; 4];
+        let mut recv_iov = [
+            libc::iovec {
+                iov_base: left.as_mut_ptr().cast(),
+                iov_len: left.len(),
+            },
+            libc::iovec {
+                iov_base: right.as_mut_ptr().cast(),
+                iov_len: right.len(),
+            },
+        ];
+        let mut recv_msg: libc::msghdr = std::mem::zeroed();
+        recv_msg.msg_iov = recv_iov.as_mut_ptr();
+        recv_msg.msg_iovlen = recv_iov.len() as _;
+
+        let recvd = libc::recvmsg(conn_fd, &mut recv_msg, 0);
+        assert_eq!(
+            recvd,
+            5,
+            "recvmsg failed: {}",
+            std::io::Error::last_os_error()
+        );
+        assert_eq!(&left, b"h");
+        assert_eq!(&right, b"ello");
+
+        let reply1 = b"wo";
+        let reply2 = b"rld";
+        let mut send_iov = [
+            libc::iovec {
+                iov_base: reply1.as_ptr() as *mut libc::c_void,
+                iov_len: reply1.len(),
+            },
+            libc::iovec {
+                iov_base: reply2.as_ptr() as *mut libc::c_void,
+                iov_len: reply2.len(),
+            },
+        ];
+        let mut send_msg: libc::msghdr = std::mem::zeroed();
+        send_msg.msg_iov = send_iov.as_mut_ptr();
+        send_msg.msg_iovlen = send_iov.len() as _;
+
+        let sent = libc::sendmsg(conn_fd, &send_msg, 0);
+        assert_eq!(
+            sent,
+            5,
+            "sendmsg failed: {}",
+            std::io::Error::last_os_error()
+        );
+
+        libc::close(conn_fd);
+        libc::close(server_fd);
+
+        let mut status = 0;
+        let waited = libc::waitpid(pid, &mut status, 0);
+        assert_eq!(
+            waited,
+            pid,
+            "waitpid failed: {}",
+            std::io::Error::last_os_error()
+        );
+        assert!(libc::WIFEXITED(status));
+        assert_eq!(libc::WEXITSTATUS(status), 0);
+    }
+}
+
+register_test!(test_tcp_sendmsg_recvmsg);
+
+pub fn test_udp_sendmsg_recvmsg() {
+    let recv_port = 31_000 + (unsafe { libc::getpid() } % 10_000) as u16;
+    let recv_addr = loopback_addr(recv_port);
+
+    unsafe {
+        let recv_fd = socket(AF_INET, SOCK_DGRAM, 0);
+        assert!(
+            recv_fd >= 0,
+            "recv socket creation failed: {}",
+            std::io::Error::last_os_error()
+        );
+        let ret = bind(
+            recv_fd,
+            &recv_addr as *const libc::sockaddr_in as *const libc::sockaddr,
+            std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+        );
+        assert_eq!(ret, 0, "bind failed: {}", std::io::Error::last_os_error());
+
+        let send_fd = socket(AF_INET, SOCK_DGRAM, 0);
+        assert!(
+            send_fd >= 0,
+            "send socket creation failed: {}",
+            std::io::Error::last_os_error()
+        );
+
+        let part1 = b"he";
+        let part2 = b"llo";
+        let mut send_iov = [
+            libc::iovec {
+                iov_base: part1.as_ptr() as *mut libc::c_void,
+                iov_len: part1.len(),
+            },
+            libc::iovec {
+                iov_base: part2.as_ptr() as *mut libc::c_void,
+                iov_len: part2.len(),
+            },
+        ];
+        let mut send_msg: libc::msghdr = std::mem::zeroed();
+        send_msg.msg_name =
+            (&recv_addr as *const libc::sockaddr_in as *mut libc::sockaddr_in).cast();
+        send_msg.msg_namelen = std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
+        send_msg.msg_iov = send_iov.as_mut_ptr();
+        send_msg.msg_iovlen = send_iov.len() as _;
+
+        let sent = libc::sendmsg(send_fd, &send_msg, 0);
+        assert_eq!(
+            sent,
+            5,
+            "sendmsg failed: {}",
+            std::io::Error::last_os_error()
+        );
+
+        let mut left = [0u8; 2];
+        let mut right = [0u8; 3];
+        let mut recv_iov = [
+            libc::iovec {
+                iov_base: left.as_mut_ptr().cast(),
+                iov_len: left.len(),
+            },
+            libc::iovec {
+                iov_base: right.as_mut_ptr().cast(),
+                iov_len: right.len(),
+            },
+        ];
+        let mut src_addr: libc::sockaddr_in = std::mem::zeroed();
+        let mut recv_msg: libc::msghdr = std::mem::zeroed();
+        recv_msg.msg_name = (&mut src_addr as *mut libc::sockaddr_in).cast();
+        recv_msg.msg_namelen = std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
+        recv_msg.msg_iov = recv_iov.as_mut_ptr();
+        recv_msg.msg_iovlen = recv_iov.len() as _;
+
+        let recvd = libc::recvmsg(recv_fd, &mut recv_msg, 0);
+        assert_eq!(
+            recvd,
+            5,
+            "recvmsg failed: {}",
+            std::io::Error::last_os_error()
+        );
+        assert_eq!(&left, b"he");
+        assert_eq!(&right, b"llo");
+        assert_eq!(
+            recv_msg.msg_namelen as usize,
+            std::mem::size_of::<libc::sockaddr_in>()
+        );
+        assert_eq!(src_addr.sin_family as i32, AF_INET);
+        assert_eq!(src_addr.sin_addr.s_addr, u32::from_ne_bytes([127, 0, 0, 1]));
+        assert_ne!(src_addr.sin_port, 0);
+
+        libc::close(send_fd);
+        libc::close(recv_fd);
+    }
+}
+
+register_test!(test_udp_sendmsg_recvmsg);
+
 pub fn test_udp_poll_read_ready() {
     let recv_port = 30_000 + (unsafe { libc::getpid() } % 10_000) as u16;
     let recv_addr = loopback_addr(recv_port);

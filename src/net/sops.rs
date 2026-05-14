@@ -78,6 +78,26 @@ pub trait SocketOps: Send + Sync {
         addr: SockAddr,
     ) -> libkernel::error::Result<usize>;
 
+    async fn recvfrom_buf(
+        &mut self,
+        _ctx: &mut FileCtx,
+        _buf: &mut [u8],
+        _flags: RecvFlags,
+        _addr: Option<SockAddr>,
+    ) -> libkernel::error::Result<(usize, Option<SockAddr>)> {
+        Err(KernelError::NotSupported)
+    }
+
+    async fn sendto_buf(
+        &mut self,
+        _ctx: &mut FileCtx,
+        _buf: &[u8],
+        _flags: SendFlags,
+        _addr: Option<SockAddr>,
+    ) -> libkernel::error::Result<usize> {
+        Err(KernelError::NotSupported)
+    }
+
     async fn shutdown(&self, _how: ShutdownHow) -> libkernel::error::Result<()> {
         Err(KernelError::NotSupported)
     }

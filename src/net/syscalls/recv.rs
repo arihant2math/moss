@@ -27,7 +27,7 @@ pub async fn sys_recvfrom(
 
     let (ops, ctx) = &mut *file.lock().await;
     let socket = ops.as_socket().ok_or(KernelError::NotASocket)?;
-    let flags = RecvFlags::from_bits(flags as u32).unwrap_or(RecvFlags::empty());
+    let flags = RecvFlags::from_bits_truncate(flags as u32);
     let (message_len, recv_addr) = socket.recvfrom(ctx, buf, len, flags, None).await?;
     if let Some(recv_addr) = recv_addr
         && !addr.is_null()

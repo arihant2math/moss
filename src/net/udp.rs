@@ -182,6 +182,46 @@ impl SocketOps for UdpSocket {
         Ok((data.len(), Some(peer)))
     }
 
+    async fn recvfrom_buf(
+        &mut self,
+        _ctx: &mut FileCtx,
+        buf: &mut [u8],
+        flags: RecvFlags,
+        _addr: Option<SockAddr>,
+    ) -> Result<(usize, Option<SockAddr>), KernelError> {
+        if buf.is_empty() || *self.rd_shutdown.lock_save_irq() {
+            return Ok((0, None));
+        }
+
+        let nonblock = flags.contains(RecvFlags::MSG_DONTWAIT);
+        let connected_peer = self.connected_peer();
+
+        let (data, peer) = self
+            .wait_until(nonblock, || {
+                with_net_core(|core| {
+                    let socket = core.sockets.get_mut::<smol_udp::Socket>(self.handle);
+                    if !socket.can_recv() {
+                        return Ok(None);
+                    }
+
+                    let (packet, meta) = socket.recv().map_err(|_| KernelError::TryAgain)?;
+                    if let Some(connected_peer) = connected_peer
+                        && connected_peer != meta.endpoint
+                    {
+                        return Ok(None);
+                    }
+
+                    let n = packet.len().min(buf.len());
+                    let data = packet[..n].to_vec();
+                    Ok(Some((data, SockAddr::from(meta.endpoint))))
+                })?
+            })
+            .await?;
+
+        buf[..data.len()].copy_from_slice(&data);
+        Ok((data.len(), Some(peer)))
+    }
+
     async fn send(
         &mut self,
         ctx: &mut FileCtx,
@@ -243,6 +283,55 @@ impl SocketOps for UdpSocket {
 
         process_packets();
         Ok(count)
+    }
+
+    async fn sendto_buf(
+        &mut self,
+        _ctx: &mut FileCtx,
+        buf: &[u8],
+        flags: SendFlags,
+        addr: Option<SockAddr>,
+    ) -> Result<usize, KernelError> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        if *self.wr_shutdown.lock_save_irq() {
+            return Err(KernelError::BrokenPipe);
+        }
+
+        self.ensure_bound()?;
+        let peer: IpEndpoint = match addr {
+            Some(addr) => addr.try_into()?,
+            None => self.connected_peer().ok_or(KernelError::InvalidValue)?,
+        };
+        let local_address = {
+            let endpoint = *self.local_endpoint.lock_save_irq();
+            infer_local_ip_for_peer(endpoint.and_then(|endpoint| endpoint.addr), peer)
+        };
+        let metadata = smol_udp::UdpMetadata {
+            endpoint: peer,
+            local_address,
+            meta: smoltcp::phy::PacketMeta::default(),
+        };
+        let nonblock = flags.contains(SendFlags::MSG_DONT_WAIT);
+
+        self.wait_until(nonblock, || {
+            with_net_core(|core| {
+                let socket = core.sockets.get_mut::<smol_udp::Socket>(self.handle);
+                if !socket.can_send() {
+                    return Ok(None);
+                }
+                socket.send_slice(buf, metadata).map_err(|err| match err {
+                    smol_udp::SendError::BufferFull => KernelError::TryAgain,
+                    smol_udp::SendError::Unaddressable => KernelError::InvalidValue,
+                })?;
+                Ok(Some(()))
+            })?
+        })
+        .await?;
+
+        process_packets();
+        Ok(buf.len())
     }
 
     async fn shutdown(&self, how: ShutdownHow) -> Result<(), KernelError> {
