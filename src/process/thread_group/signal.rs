@@ -297,6 +297,24 @@ impl SignalActionState {
         }
     }
 
+    pub fn clone_for_child(&self, clear_sighand: bool, clear_alt_stack: bool) -> Self {
+        let mut cloned = self.clone();
+
+        if clear_sighand {
+            for action in &mut cloned.action.0 {
+                if matches!(action, SigActionState::Action(_)) {
+                    *action = SigActionState::Default;
+                }
+            }
+        }
+
+        if clear_alt_stack {
+            cloned.alt_stack = None;
+        }
+
+        cloned
+    }
+
     pub fn action_signal(&self, id: SigId) -> Option<KSignalAction> {
         match self.action[id] {
             SigActionState::Ignore => None, // look for another signal,

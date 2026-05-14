@@ -85,11 +85,15 @@ pub fn do_exit_group(task: &Arc<Task>, exit_code: ChildState) {
 
     parent.children.lock_save_irq().remove(&process.tgid);
 
+    let exit_signal = *process.exit_signal.lock_save_irq();
+
     parent
         .child_notifiers
-        .child_update(task.descriptor().tgid(), exit_code);
+        .child_update(task.descriptor().tgid(), exit_code, exit_signal);
 
-    parent.queue_signal(SigId::SIGCHLD);
+    if let Some(signal) = exit_signal {
+        parent.queue_signal(signal);
+    }
 
     // 5. This thread is now finished.
     sched::current_work().state.finish();

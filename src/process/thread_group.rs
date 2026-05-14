@@ -111,6 +111,7 @@ pub struct ThreadGroup {
     pub rsrc_lim: Arc<SpinLock<ResourceLimits>>,
     pub pending_signals: SpinLock<SigSet>,
     pub priority: SpinLock<i8>,
+    pub exit_signal: SpinLock<Option<SigId>>,
     pub child_notifiers: Notifiers,
     /// `true` while a parent is blocked in `CLONE_VFORK` waiting for this
     /// process to either `execve()` successfully or exit.
@@ -124,21 +125,32 @@ pub struct ThreadGroup {
 unsafe impl Send for ThreadGroup {}
 
 impl ThreadGroup {
-    pub fn new_child(self: Arc<Self>, share_state: bool, tid: Tid) -> Arc<ThreadGroup> {
-        let mut builder = ThreadGroupBuilder::new(Tgid::from_tid(tid)).with_parent(self.clone());
+    pub fn new_child(
+        self: Arc<Self>,
+        share_sighand: bool,
+        clear_sighand: bool,
+        clear_alt_stack: bool,
+        tid: Tid,
+        exit_signal: Option<SigId>,
+    ) -> Arc<ThreadGroup> {
+        let mut builder = ThreadGroupBuilder::new(Tgid::from_tid(tid))
+            .with_parent(self.clone())
+            .with_sid(*self.sid.lock_save_irq())
+            .with_umask(*self.umask.lock_save_irq())
+            .with_priority(*self.priority.lock_save_irq())
+            .with_exit_signal(exit_signal)
+            .with_rsrc_lim(Arc::new(SpinLock::new(
+                self.rsrc_lim.lock_save_irq().clone(),
+            )));
 
-        if share_state {
-            builder = builder
-                .with_sigstate(self.signals.clone())
-                .with_rsrc_lim(self.rsrc_lim.clone());
+        if share_sighand {
+            builder = builder.with_sigstate(self.signals.clone());
         } else {
-            builder = builder
-                .with_sigstate(Arc::new(SpinLock::new(
-                    self.signals.lock_save_irq().clone(),
-                )))
-                .with_rsrc_lim(Arc::new(SpinLock::new(
-                    self.rsrc_lim.lock_save_irq().clone(),
-                )));
+            builder = builder.with_sigstate(Arc::new(SpinLock::new(
+                self.signals
+                    .lock_save_irq()
+                    .clone_for_child(clear_sighand, clear_alt_stack),
+            )));
         }
 
         let new_tg = builder.build();

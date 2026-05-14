@@ -190,7 +190,13 @@ Threads:\t{tasks}\n",
                     output.push_str(&format!("{} ", 0)); // wchan
                     output.push_str(&format!("{} ", 0)); // nswap
                     output.push_str(&format!("{} ", 0)); // cnswap
-                    output.push_str(&format!("{} ", 0)); // exit_signal
+                    output.push_str(&format!(
+                        "{} ",
+                        task.process
+                            .exit_signal
+                            .lock_save_irq()
+                            .map_or(0, |signal| signal.user_id())
+                    )); // exit_signal
                     output.push_str(&format!(
                         "{} ",
                         task.sched_data

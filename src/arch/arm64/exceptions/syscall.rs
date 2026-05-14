@@ -75,7 +75,7 @@ use crate::{
     },
     process::{
         caps::{sys_capget, sys_capset},
-        clone::sys_clone,
+        clone::{sys_clone, sys_clone3},
         creds::{
             sys_getegid, sys_geteuid, sys_getgid, sys_getgroups, sys_getresgid, sys_getresuid,
             sys_getsid, sys_gettid, sys_getuid, sys_setfsgid, sys_setfsuid, sys_setgid,
@@ -856,6 +856,7 @@ pub async fn handle_syscall(mut ctx: ProcessCtx) {
         0x125 => Err(KernelError::NotSupported),
         0x1ae => Err(KernelError::NotSupported),
         0x1b2 => sys_pidfd_open(&ctx, arg1 as _, arg2 as _).await,
+        0x1b3 => sys_clone3(&ctx, TUA::from_value(arg1 as _), arg2 as _).await,
         0x1b4 => sys_close_range(&ctx, arg1.into(), arg2.into(), arg3 as _).await,
         0x1b7 => {
             sys_faccessat2(

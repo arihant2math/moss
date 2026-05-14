@@ -78,6 +78,12 @@ pub enum ChildState {
 }
 
 #[derive(Clone, Copy, Debug)]
+struct ChildEvent {
+    state: ChildState,
+    exit_signal: Option<SigId>,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct TraceTrap {
     signal: SigId,
     mask: i32,
@@ -107,8 +113,30 @@ impl ChildState {
     }
 }
 
+impl ChildEvent {
+    fn is_clone_child(&self) -> bool {
+        self.exit_signal != Some(SigId::SIGCHLD)
+    }
+
+    fn matches_wait_flags(&self, flags: WaitFlags) -> bool {
+        if !self.state.matches_wait_flags(flags) {
+            return false;
+        }
+
+        if flags.contains(WaitFlags::WALL) {
+            return true;
+        }
+
+        if flags.contains(WaitFlags::WCLONE) {
+            self.is_clone_child()
+        } else {
+            !self.is_clone_child()
+        }
+    }
+}
+
 struct NotifierState {
-    children: BTreeMap<Tgid, ChildState>,
+    children: BTreeMap<Tgid, ChildEvent>,
     ptrace: BTreeMap<Tid, TraceTrap>,
 }
 
@@ -138,9 +166,15 @@ impl Notifiers {
         }
     }
 
-    pub fn child_update(&self, tgid: Tgid, new_state: ChildState) {
+    pub fn child_update(&self, tgid: Tgid, new_state: ChildState, exit_signal: Option<SigId>) {
         self.inner.update(|state| {
-            state.children.insert(tgid, new_state);
+            state.children.insert(
+                tgid,
+                ChildEvent {
+                    state: new_state,
+                    exit_signal,
+                },
+            );
 
             // Since some wakers may be conditional upon state update changes,
             // notify everyone whenever a child updates it's state.
@@ -160,7 +194,7 @@ impl Notifiers {
 }
 
 fn find_child_event(
-    children: &mut BTreeMap<Tgid, ChildState>,
+    children: &mut BTreeMap<Tgid, ChildEvent>,
     pid: PidT,
     flags: WaitFlags,
     remove_entry: bool,
@@ -205,11 +239,11 @@ fn find_child_event(
     if remove_entry {
         children
             .remove_entry(&key)
-            .map(|(k, v)| (k.value() as PidT, WaitEvent::Child(v)))
+            .map(|(k, v)| (k.value() as PidT, WaitEvent::Child(v.state)))
     } else {
         children
             .get(&key)
-            .map(|v| (key.value() as PidT, WaitEvent::Child(*v)))
+            .map(|v| (key.value() as PidT, WaitEvent::Child(v.state)))
     }
 }
 

@@ -233,9 +233,13 @@ pub fn dispatch_userspace_task(frame: *mut UserCtx) {
                                 .as_ref()
                                 .and_then(|p| p.upgrade())
                             {
-                                parent
-                                    .child_notifiers
-                                    .child_update(process.tgid, ChildState::Stop { signal });
+                                let exit_signal = *process.exit_signal.lock_save_irq();
+
+                                parent.child_notifiers.child_update(
+                                    process.tgid,
+                                    ChildState::Stop { signal },
+                                    exit_signal,
+                                );
 
                                 parent.deliver_signal(SigId::SIGCHLD);
                             }
@@ -266,9 +270,13 @@ pub fn dispatch_userspace_task(frame: *mut UserCtx) {
                                 .as_ref()
                                 .and_then(|p| p.upgrade())
                             {
-                                parent
-                                    .child_notifiers
-                                    .child_update(process.tgid, ChildState::Continue);
+                                let exit_signal = *process.exit_signal.lock_save_irq();
+
+                                parent.child_notifiers.child_update(
+                                    process.tgid,
+                                    ChildState::Continue,
+                                    exit_signal,
+                                );
 
                                 parent.deliver_signal(SigId::SIGCHLD);
                             }

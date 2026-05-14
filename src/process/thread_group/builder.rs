@@ -10,7 +10,7 @@ use crate::{
 use super::{
     Pgid, ProcessState, Sid, TG_LIST, Tgid, ThreadGroup,
     rsrc_lim::ResourceLimits,
-    signal::{SigSet, SignalActionState},
+    signal::{SigId, SigSet, SignalActionState},
     wait::Notifiers,
 };
 
@@ -18,8 +18,10 @@ use super::{
 pub struct ThreadGroupBuilder {
     tgid: Tgid,
     parent: Option<Arc<ThreadGroup>>,
+    sid: Option<Sid>,
     umask: Option<u32>,
     pri: Option<i8>,
+    exit_signal: Option<SigId>,
     sigstate: Option<Arc<SpinLock<SignalActionState>>>,
     rsrc_lim: Option<Arc<SpinLock<ResourceLimits>>>,
 }
@@ -30,16 +32,33 @@ impl ThreadGroupBuilder {
         ThreadGroupBuilder {
             tgid,
             parent: None,
+            sid: None,
             umask: None,
             sigstate: None,
             rsrc_lim: None,
             pri: None,
+            exit_signal: Some(SigId::SIGCHLD),
         }
     }
 
     /// Sets the parent of the thread group.
     pub fn with_parent(mut self, parent: Arc<ThreadGroup>) -> Self {
         self.parent = Some(parent);
+        self
+    }
+
+    pub fn with_sid(mut self, sid: Sid) -> Self {
+        self.sid = Some(sid);
+        self
+    }
+
+    pub fn with_umask(mut self, umask: u32) -> Self {
+        self.umask = Some(umask);
+        self
+    }
+
+    pub fn with_exit_signal(mut self, exit_signal: Option<SigId>) -> Self {
+        self.exit_signal = exit_signal;
         self
     }
 
@@ -71,7 +90,7 @@ impl ThreadGroupBuilder {
                     .map(|x| *x.pgid.lock_save_irq())
                     .unwrap_or_else(|| Pgid(self.tgid.value())),
             ),
-            sid: SpinLock::new(Sid(self.tgid.value())),
+            sid: SpinLock::new(self.sid.unwrap_or(Sid(self.tgid.value()))),
             parent: SpinLock::new(self.parent.as_ref().map(Arc::downgrade)),
             umask: SpinLock::new(self.umask.unwrap_or(0)),
             children: SpinLock::new(BTreeMap::new()),
@@ -85,6 +104,7 @@ impl ThreadGroupBuilder {
             child_notifiers: Notifiers::new(),
             vfork_blocked_parent: CondVar::new(false),
             priority: SpinLock::new(self.pri.unwrap_or(0)),
+            exit_signal: SpinLock::new(self.exit_signal),
             utime: AtomicUsize::new(0),
             stime: AtomicUsize::new(0),
             last_account: AtomicUsize::new(0),
