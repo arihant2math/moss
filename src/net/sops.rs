@@ -1,11 +1,11 @@
 use crate::fs::fops::FileOps;
 use crate::fs::open_file::FileCtx;
-use crate::net::{ShutdownHow, SockAddr};
+use crate::net::{ShutdownHow, SockAddr, SocketLen};
 use alloc::boxed::Box;
 use async_trait::async_trait;
 use bitflags::bitflags;
 use libkernel::error::KernelError;
-use libkernel::memory::address::UA;
+use libkernel::memory::address::{TUA, UA};
 
 bitflags! {
     #[derive(Copy, Clone)]
@@ -78,6 +78,26 @@ pub trait SocketOps: Send + Sync {
     ) -> libkernel::error::Result<usize>;
 
     async fn shutdown(&self, _how: ShutdownHow) -> libkernel::error::Result<()> {
+        Err(KernelError::NotSupported)
+    }
+
+    async fn setsockopt(
+        &self,
+        _level: i32,
+        _optname: i32,
+        _optval: UA,
+        _optlen: SocketLen,
+    ) -> libkernel::error::Result<()> {
+        Err(KernelError::NotSupported)
+    }
+
+    async fn getsockopt(
+        &self,
+        _level: i32,
+        _optname: i32,
+        _optval: UA,
+        _optlen: TUA<SocketLen>,
+    ) -> libkernel::error::Result<()> {
         Err(KernelError::NotSupported)
     }
 

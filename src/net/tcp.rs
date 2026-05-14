@@ -1,11 +1,14 @@
 use crate::fs::fops::FileOps;
 use crate::fs::open_file::FileCtx;
 use crate::memory::uaccess::{copy_from_user_slice, copy_to_user_slice};
+use crate::net::sockopt::{
+    SocketMeta, SocketOptionState, SocketRuntimeInfo, get_sockopt, set_sockopt,
+};
 use crate::net::sops::{RecvFlags, SendFlags, SocketOps};
 use crate::net::{
-    ShutdownHow, SockAddr, allocate_ephemeral_port, normalize_local_endpoint_for_peer,
-    poll_network, process_packets, tcp_socket_remote_endpoint, tcp_socket_state,
-    wait_for_network_progress, with_net_core,
+    AF_INET, IPPROTO_TCP, SOCK_STREAM, ShutdownHow, SockAddr, allocate_ephemeral_port,
+    normalize_local_endpoint_for_peer, poll_network, process_packets, tcp_socket_remote_endpoint,
+    tcp_socket_state, wait_for_network_progress, with_net_core,
 };
 use crate::sync::SpinLock;
 use alloc::boxed::Box;
@@ -24,6 +27,7 @@ const BACKLOG_MAX: usize = 8;
 
 pub struct TcpSocket {
     handle: SocketHandle,
+    opts: SpinLock<SocketOptionState>,
     local_endpoint: SpinLock<Option<IpListenEndpoint>>,
     backlogs: SpinLock<Vec<TcpSocket>>,
     num_backlogs: AtomicUsize,
@@ -39,12 +43,21 @@ impl TcpSocket {
         let handle = with_net_core(|core| core.sockets.add(inner))?;
         Ok(TcpSocket {
             handle,
+            opts: SpinLock::new(SocketOptionState::new()),
             local_endpoint: SpinLock::new(None),
             backlogs: SpinLock::new(Vec::new()),
             num_backlogs: AtomicUsize::new(0),
             rd_shutdown: SpinLock::new(false),
             wr_shutdown: SpinLock::new(false),
         })
+    }
+
+    fn socket_meta(&self) -> SocketMeta {
+        SocketMeta {
+            domain: AF_INET,
+            type_: SOCK_STREAM,
+            protocol: IPPROTO_TCP,
+        }
     }
 
     fn destroy_handle(&self) {
@@ -333,6 +346,46 @@ impl SocketOps for TcpSocket {
 
         process_packets();
         Ok(())
+    }
+
+    async fn setsockopt(
+        &self,
+        level: i32,
+        optname: i32,
+        optval: UA,
+        optlen: crate::net::SocketLen,
+    ) -> Result<(), KernelError> {
+        set_sockopt(
+            &self.opts,
+            self.socket_meta(),
+            level,
+            optname,
+            optval,
+            optlen,
+        )
+        .await
+    }
+
+    async fn getsockopt(
+        &self,
+        level: i32,
+        optname: i32,
+        optval: UA,
+        optlen: libkernel::memory::address::TUA<crate::net::SocketLen>,
+    ) -> Result<(), KernelError> {
+        get_sockopt(
+            &self.opts,
+            self.socket_meta(),
+            SocketRuntimeInfo {
+                accept_conn: self.num_backlogs.load(Ordering::Relaxed) != 0,
+                error: 0,
+            },
+            level,
+            optname,
+            optval,
+            optlen,
+        )
+        .await
     }
 
     async fn release_socket(&mut self, _ctx: &FileCtx) -> Result<(), KernelError> {

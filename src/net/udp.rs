@@ -1,10 +1,14 @@
 use crate::fs::fops::FileOps;
 use crate::fs::open_file::FileCtx;
 use crate::memory::uaccess::{copy_from_user_slice, copy_to_user_slice};
+use crate::net::sockopt::{
+    SocketMeta, SocketOptionState, SocketRuntimeInfo, get_sockopt, set_sockopt,
+};
 use crate::net::sops::{RecvFlags, SendFlags, SocketOps};
 use crate::net::{
-    ShutdownHow, SockAddr, allocate_ephemeral_port, infer_local_ip_for_peer, poll_network,
-    process_packets, wait_for_network_progress, with_net_core,
+    AF_INET, IPPROTO_UDP, SOCK_DGRAM, ShutdownHow, SockAddr, allocate_ephemeral_port,
+    infer_local_ip_for_peer, poll_network, process_packets, wait_for_network_progress,
+    with_net_core,
 };
 use crate::sync::SpinLock;
 use alloc::boxed::Box;
@@ -21,6 +25,7 @@ const UDP_PAYLOAD_CAPACITY: usize = 8192;
 
 pub struct UdpSocket {
     handle: SocketHandle,
+    opts: SpinLock<SocketOptionState>,
     local_endpoint: SpinLock<Option<IpListenEndpoint>>,
     connected_peer: SpinLock<Option<IpEndpoint>>,
     rd_shutdown: SpinLock<bool>,
@@ -41,11 +46,20 @@ impl UdpSocket {
         let handle = with_net_core(|core| core.sockets.add(inner))?;
         Ok(Self {
             handle,
+            opts: SpinLock::new(SocketOptionState::new()),
             local_endpoint: SpinLock::new(None),
             connected_peer: SpinLock::new(None),
             rd_shutdown: SpinLock::new(false),
             wr_shutdown: SpinLock::new(false),
         })
+    }
+
+    fn socket_meta(&self) -> SocketMeta {
+        SocketMeta {
+            domain: AF_INET,
+            type_: SOCK_DGRAM,
+            protocol: IPPROTO_UDP,
+        }
     }
 
     fn normalized_local_endpoint(&self) -> IpListenEndpoint {
@@ -240,6 +254,46 @@ impl SocketOps for UdpSocket {
             }
         }
         Ok(())
+    }
+
+    async fn setsockopt(
+        &self,
+        level: i32,
+        optname: i32,
+        optval: UA,
+        optlen: crate::net::SocketLen,
+    ) -> Result<(), KernelError> {
+        set_sockopt(
+            &self.opts,
+            self.socket_meta(),
+            level,
+            optname,
+            optval,
+            optlen,
+        )
+        .await
+    }
+
+    async fn getsockopt(
+        &self,
+        level: i32,
+        optname: i32,
+        optval: UA,
+        optlen: libkernel::memory::address::TUA<crate::net::SocketLen>,
+    ) -> Result<(), KernelError> {
+        get_sockopt(
+            &self.opts,
+            self.socket_meta(),
+            SocketRuntimeInfo {
+                accept_conn: false,
+                error: 0,
+            },
+            level,
+            optname,
+            optval,
+            optlen,
+        )
+        .await
     }
 
     async fn release_socket(&mut self, _ctx: &FileCtx) -> Result<(), KernelError> {

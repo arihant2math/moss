@@ -2,7 +2,7 @@ use crate::register_test;
 use libc::{AF_INET, AF_UNIX, SOCK_DGRAM, SOCK_STREAM};
 use libc::{accept, bind, connect, listen, shutdown, socket};
 use std::io::{Read, Write};
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, TcpListener};
 use std::ptr;
 
 pub fn test_inet_socket_creation() {
@@ -110,6 +110,13 @@ pub fn test_tcp_socket_bind() {
 
 register_test!(test_tcp_socket_bind);
 
+pub fn test_tcp_socket_bind_rust() {
+    let socket = TcpListener::bind((SERVER_IP, SERVER_PORT)).expect("Failed to bind TCP socket");
+    drop(socket);
+}
+
+register_test!(test_tcp_socket_bind_rust);
+
 pub fn test_tcp_client_server() {
     let server_port = 20_000 + (unsafe { libc::getpid() } % 20_000) as u16;
     let server_addr = loopback_addr(server_port);
@@ -210,6 +217,86 @@ pub fn test_tcp_client_server() {
 }
 
 register_test!(test_tcp_client_server);
+
+fn getsockopt_int(fd: libc::c_int, level: libc::c_int, optname: libc::c_int) -> libc::c_int {
+    let mut value: libc::c_int = -1;
+    let mut len = std::mem::size_of_val(&value) as libc::socklen_t;
+    let ret = unsafe {
+        libc::getsockopt(
+            fd,
+            level,
+            optname,
+            &mut value as *mut _ as *mut libc::c_void,
+            &mut len,
+        )
+    };
+    assert_eq!(
+        ret,
+        0,
+        "getsockopt failed: {}",
+        std::io::Error::last_os_error()
+    );
+    assert_eq!(len as usize, std::mem::size_of_val(&value));
+    value
+}
+
+pub fn test_socket_options() {
+    let fd = unsafe { socket(AF_INET, SOCK_STREAM, 0) };
+    assert!(
+        fd >= 0,
+        "socket failed: {}",
+        std::io::Error::last_os_error()
+    );
+
+    let one: libc::c_int = 1;
+    let ret = unsafe {
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_REUSEADDR,
+            &one as *const _ as *const libc::c_void,
+            std::mem::size_of_val(&one) as libc::socklen_t,
+        )
+    };
+    assert_eq!(ret, 0, "setsockopt SO_REUSEADDR failed");
+    assert_eq!(getsockopt_int(fd, libc::SOL_SOCKET, libc::SO_REUSEADDR), 1);
+    assert_eq!(
+        getsockopt_int(fd, libc::SOL_SOCKET, libc::SO_TYPE),
+        SOCK_STREAM
+    );
+
+    let ret = unsafe {
+        libc::setsockopt(
+            fd,
+            libc::IPPROTO_TCP,
+            libc::TCP_NODELAY,
+            &one as *const _ as *const libc::c_void,
+            std::mem::size_of_val(&one) as libc::socklen_t,
+        )
+    };
+    assert_eq!(ret, 0, "setsockopt TCP_NODELAY failed");
+    assert_eq!(getsockopt_int(fd, libc::IPPROTO_TCP, libc::TCP_NODELAY), 1);
+
+    let server_addr = loopback_addr(0);
+    let ret = unsafe {
+        bind(
+            fd,
+            &server_addr as *const libc::sockaddr_in as *const libc::sockaddr,
+            std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+        )
+    };
+    assert_eq!(ret, 0, "bind failed: {}", std::io::Error::last_os_error());
+
+    let ret = unsafe { listen(fd, 1) };
+    assert_eq!(ret, 0, "listen failed: {}", std::io::Error::last_os_error());
+    assert_eq!(getsockopt_int(fd, libc::SOL_SOCKET, libc::SO_ACCEPTCONN), 1);
+
+    unsafe {
+        libc::close(fd);
+    }
+}
+
+register_test!(test_socket_options);
 
 pub fn test_unix_socket_creation() {
     unsafe {

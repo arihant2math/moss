@@ -1,3 +1,4 @@
+mod sockopt;
 mod sops;
 pub mod syscalls;
 pub(crate) mod tcp;

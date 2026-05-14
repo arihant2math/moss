@@ -61,9 +61,11 @@ use crate::{
         accept::{sys_accept, sys_accept4},
         bind::sys_bind,
         connect::sys_connect,
+        getsockopt::sys_getsockopt,
         listen::sys_listen,
         recv::sys_recvfrom,
         send::sys_sendto,
+        setsockopt::sys_setsockopt,
         shutdown::sys_shutdown,
         socket::sys_socket,
     },
@@ -666,6 +668,28 @@ pub async fn handle_syscall(mut ctx: ProcessCtx) {
                 arg4 as _,
                 UA::from_value(arg5 as _),
                 TUA::from_value(arg6 as _),
+            )
+            .await
+        }
+        0xd0 => {
+            sys_setsockopt(
+                &ctx,
+                arg1.into(),
+                arg2 as _,
+                arg3 as _,
+                UA::from_value(arg4 as _),
+                arg5 as _,
+            )
+            .await
+        }
+        0xd1 => {
+            sys_getsockopt(
+                &ctx,
+                arg1.into(),
+                arg2 as _,
+                arg3 as _,
+                UA::from_value(arg4 as _),
+                TUA::from_value(arg5 as _),
             )
             .await
         }

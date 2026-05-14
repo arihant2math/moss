@@ -1,8 +1,13 @@
 use crate::fs::open_file::FileCtx;
 use crate::kernel::kpipe::KPipe;
 use crate::memory::uaccess::{copy_from_user_slice, copy_to_user_slice};
+use crate::net::sockopt::{
+    SocketMeta, SocketOptionState, SocketRuntimeInfo, get_sockopt, set_sockopt,
+};
 use crate::net::sops::{RecvFlags, SendFlags};
-use crate::net::{SockAddr, SockAddrUn, SocketOps};
+use crate::net::{
+    AF_UNIX, SOCK_DGRAM, SOCK_SEQPACKET, SOCK_STREAM, SockAddr, SockAddrUn, SocketOps,
+};
 use crate::sync::SpinLock;
 use crate::sync::{Mutex, OnceLock};
 use alloc::boxed::Box;
@@ -97,6 +102,7 @@ enum SocketType {
 
 pub struct UnixSocket {
     socket_type: SocketType,
+    opts: SpinLock<SocketOptionState>,
     /// Recv inbox
     inbox: Inbox,
     /// The peer endpoint's inbox
@@ -114,6 +120,7 @@ impl UnixSocket {
     fn new(socket_type: SocketType) -> Self {
         UnixSocket {
             socket_type,
+            opts: SpinLock::new(SocketOptionState::new()),
             inbox: Inbox::new(socket_type),
             peer_inbox: SpinLock::new(None),
             local_addr: SpinLock::new(None),
@@ -122,6 +129,18 @@ impl UnixSocket {
             backlog: SpinLock::new(0),
             rd_shutdown: SpinLock::new(false),
             wr_shutdown: SpinLock::new(false),
+        }
+    }
+
+    fn socket_meta(&self) -> SocketMeta {
+        SocketMeta {
+            domain: AF_UNIX,
+            type_: match self.socket_type {
+                SocketType::Stream => SOCK_STREAM,
+                SocketType::Datagram => SOCK_DGRAM,
+                SocketType::SeqPacket => SOCK_SEQPACKET,
+            },
+            protocol: 0,
         }
     }
 
@@ -402,6 +421,47 @@ impl SocketOps for UnixSocket {
             }
         }
         Ok(())
+    }
+
+    async fn setsockopt(
+        &self,
+        level: i32,
+        optname: i32,
+        optval: UA,
+        optlen: crate::net::SocketLen,
+    ) -> Result<()> {
+        set_sockopt(
+            &self.opts,
+            self.socket_meta(),
+            level,
+            optname,
+            optval,
+            optlen,
+        )
+        .await
+    }
+
+    async fn getsockopt(
+        &self,
+        level: i32,
+        optname: i32,
+        optval: UA,
+        optlen: libkernel::memory::address::TUA<crate::net::SocketLen>,
+    ) -> Result<()> {
+        let accept_conn = *self.listening.lock_save_irq();
+        get_sockopt(
+            &self.opts,
+            self.socket_meta(),
+            SocketRuntimeInfo {
+                accept_conn,
+                error: 0,
+            },
+            level,
+            optname,
+            optval,
+            optlen,
+        )
+        .await
     }
 
     fn as_file(self: Box<Self>) -> Box<dyn crate::fs::fops::FileOps> {
