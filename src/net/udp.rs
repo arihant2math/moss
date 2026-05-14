@@ -7,13 +7,14 @@ use crate::net::sockopt::{
 use crate::net::sops::{RecvFlags, SendFlags, SocketOps};
 use crate::net::{
     AF_INET, IPPROTO_UDP, SOCK_DGRAM, ShutdownHow, SockAddr, allocate_ephemeral_port,
-    infer_local_ip_for_peer, poll_network, process_packets, wait_for_network_progress,
-    with_net_core,
+    infer_local_ip_for_peer, poll_network, process_packets, wait_for_network_condition,
+    wait_for_network_progress, with_net_core,
 };
 use crate::sync::SpinLock;
 use alloc::boxed::Box;
 use alloc::vec;
 use async_trait::async_trait;
+use core::{future::Future, pin::Pin};
 use libkernel::error::KernelError;
 use libkernel::memory::address::UA;
 use smoltcp::iface::SocketHandle;
@@ -305,6 +306,20 @@ impl SocketOps for UdpSocket {
             let _ = core.sockets.remove(self.handle);
         });
         Ok(())
+    }
+
+    fn poll_read_ready(&self) -> Pin<Box<dyn Future<Output = Result<(), KernelError>> + Send>> {
+        let handle = self.handle;
+        wait_for_network_condition(move || {
+            with_net_core(|core| core.sockets.get::<smol_udp::Socket>(handle).can_recv())
+        })
+    }
+
+    fn poll_write_ready(&self) -> Pin<Box<dyn Future<Output = Result<(), KernelError>> + Send>> {
+        let handle = self.handle;
+        wait_for_network_condition(move || {
+            with_net_core(|core| core.sockets.get::<smol_udp::Socket>(handle).can_send())
+        })
     }
 
     fn as_file(self: Box<Self>) -> Box<dyn FileOps> {

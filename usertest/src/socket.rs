@@ -218,6 +218,101 @@ pub fn test_tcp_client_server() {
 
 register_test!(test_tcp_client_server);
 
+pub fn test_udp_poll_read_ready() {
+    let recv_port = 30_000 + (unsafe { libc::getpid() } % 10_000) as u16;
+    let recv_addr = loopback_addr(recv_port);
+
+    unsafe {
+        let recv_fd = socket(AF_INET, SOCK_DGRAM, 0);
+        assert!(
+            recv_fd >= 0,
+            "recv socket creation failed: {}",
+            std::io::Error::last_os_error()
+        );
+
+        let ret = bind(
+            recv_fd,
+            &recv_addr as *const libc::sockaddr_in as *const libc::sockaddr,
+            std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+        );
+        assert_eq!(
+            ret,
+            0,
+            "udp bind failed: {}",
+            std::io::Error::last_os_error()
+        );
+
+        let pid = libc::fork();
+        if pid < 0 {
+            panic!("fork failed: {}", std::io::Error::last_os_error());
+        }
+
+        if pid == 0 {
+            libc::usleep(100_000);
+
+            let send_fd = socket(AF_INET, SOCK_DGRAM, 0);
+            if send_fd < 0 {
+                panic!(
+                    "send socket creation failed: {}",
+                    std::io::Error::last_os_error()
+                );
+            }
+
+            let msg = b"ping";
+            let sent = libc::sendto(
+                send_fd,
+                msg.as_ptr().cast(),
+                msg.len(),
+                0,
+                &recv_addr as *const libc::sockaddr_in as *const libc::sockaddr,
+                std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+            );
+            if sent != msg.len() as isize {
+                panic!("sendto failed: {}", std::io::Error::last_os_error());
+            }
+
+            libc::close(send_fd);
+            libc::_exit(0);
+        }
+
+        let mut pfd = libc::pollfd {
+            fd: recv_fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let ready = libc::poll(&mut pfd, 1, 1000);
+        assert_eq!(ready, 1, "poll failed: {}", std::io::Error::last_os_error());
+        assert_ne!(pfd.revents & libc::POLLIN, 0);
+
+        let mut buf = [0u8; 4];
+        let recvd = libc::recvfrom(
+            recv_fd,
+            buf.as_mut_ptr().cast(),
+            buf.len(),
+            0,
+            ptr::null_mut(),
+            ptr::null_mut(),
+        );
+        assert_eq!(recvd, buf.len() as isize);
+        assert_eq!(&buf, b"ping");
+
+        libc::close(recv_fd);
+
+        let mut status = 0;
+        let waited = libc::waitpid(pid, &mut status, 0);
+        assert_eq!(
+            waited,
+            pid,
+            "waitpid failed: {}",
+            std::io::Error::last_os_error()
+        );
+        assert!(libc::WIFEXITED(status));
+        assert_eq!(libc::WEXITSTATUS(status), 0);
+    }
+}
+
+register_test!(test_udp_poll_read_ready);
+
 fn getsockopt_int(fd: libc::c_int, level: libc::c_int, optname: libc::c_int) -> libc::c_int {
     let mut value: libc::c_int = -1;
     let mut len = std::mem::size_of_val(&value) as libc::socklen_t;

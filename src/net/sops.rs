@@ -4,6 +4,7 @@ use crate::net::{ShutdownHow, SockAddr, SocketLen};
 use alloc::boxed::Box;
 use async_trait::async_trait;
 use bitflags::bitflags;
+use core::{future::Future, pin::Pin};
 use libkernel::error::KernelError;
 use libkernel::memory::address::{TUA, UA};
 
@@ -105,6 +106,18 @@ pub trait SocketOps: Send + Sync {
         Ok(())
     }
 
+    fn poll_read_ready(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = libkernel::error::Result<()>> + 'static + Send>> {
+        Box::pin(async { Err(KernelError::NotSupported) })
+    }
+
+    fn poll_write_ready(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = libkernel::error::Result<()>> + 'static + Send>> {
+        Box::pin(async { Err(KernelError::NotSupported) })
+    }
+
     fn as_file(self: Box<Self>) -> Box<dyn FileOps>;
 }
 
@@ -153,6 +166,18 @@ where
 
     async fn release(&mut self, ctx: &FileCtx) -> libkernel::error::Result<()> {
         self.release_socket(ctx).await
+    }
+
+    fn poll_read_ready(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = libkernel::error::Result<()>> + 'static + Send>> {
+        <Self as SocketOps>::poll_read_ready(self)
+    }
+
+    fn poll_write_ready(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = libkernel::error::Result<()>> + 'static + Send>> {
+        <Self as SocketOps>::poll_write_ready(self)
     }
 
     fn as_socket(&mut self) -> Option<&mut dyn SocketOps> {

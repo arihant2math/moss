@@ -9,11 +9,14 @@ use crate::drivers::timer::now;
 use crate::drivers::virtio_hal::VirtioHal;
 use crate::memory::uaccess::{copy_from_user, copy_from_user_slice};
 use crate::sync::{OnceLock, SpinLock};
+use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::future::Future;
 use core::net::Ipv4Addr;
+use core::pin::Pin;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::time::Duration;
 use libkernel::error::KernelError;
@@ -539,6 +542,20 @@ pub async fn parse_sockaddr(uaddr: UA, len: SocketLen) -> Result<SockAddr, Kerne
 
 pub async fn wait_for_network_progress() {
     crate::drivers::timer::sleep(wait_delay()).await;
+}
+
+pub(crate) fn wait_for_network_condition(
+    mut ready: impl FnMut() -> Result<bool, KernelError> + Send + 'static,
+) -> Pin<Box<dyn Future<Output = Result<(), KernelError>> + Send>> {
+    Box::pin(async move {
+        loop {
+            poll_network()?;
+            if ready()? {
+                return Ok(());
+            }
+            wait_for_network_progress().await;
+        }
+    })
 }
 
 pub fn tcp_socket_state(

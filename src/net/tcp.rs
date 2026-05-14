@@ -8,15 +8,15 @@ use crate::net::sops::{RecvFlags, SendFlags, SocketOps};
 use crate::net::{
     AF_INET, IPPROTO_TCP, SOCK_STREAM, ShutdownHow, SockAddr, allocate_ephemeral_port,
     normalize_local_endpoint_for_peer, poll_network, process_packets, tcp_socket_remote_endpoint,
-    tcp_socket_state, wait_for_network_progress, with_net_core,
+    tcp_socket_state, wait_for_network_condition, wait_for_network_progress, with_net_core,
 };
 use crate::sync::SpinLock;
 use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
 use async_trait::async_trait;
-use core::net::Ipv4Addr;
 use core::sync::atomic::{AtomicUsize, Ordering};
+use core::{future::Future, net::Ipv4Addr, pin::Pin};
 use libkernel::error::KernelError;
 use libkernel::memory::address::UA;
 use smoltcp::iface::SocketHandle;
@@ -394,6 +394,49 @@ impl SocketOps for TcpSocket {
         }
         self.destroy_handle();
         Ok(())
+    }
+
+    fn poll_read_ready(&self) -> Pin<Box<dyn Future<Output = Result<(), KernelError>> + Send>> {
+        if self.num_backlogs.load(Ordering::Relaxed) != 0 {
+            let backlog_handles = self
+                .backlogs
+                .lock_save_irq()
+                .iter()
+                .map(|sock| sock.handle)
+                .collect::<Vec<_>>();
+
+            return wait_for_network_condition(move || {
+                with_net_core(|core| {
+                    Ok(backlog_handles.iter().any(|handle| {
+                        matches!(
+                            core.sockets.get::<smol_tcp::Socket>(*handle).state(),
+                            smol_tcp::State::Established
+                                | smol_tcp::State::CloseWait
+                                | smol_tcp::State::FinWait1
+                                | smol_tcp::State::FinWait2
+                        )
+                    }))
+                })?
+            });
+        }
+
+        let handle = self.handle;
+        wait_for_network_condition(move || {
+            with_net_core(|core| {
+                let socket = core.sockets.get::<smol_tcp::Socket>(handle);
+                socket.can_recv() || !socket.may_recv()
+            })
+        })
+    }
+
+    fn poll_write_ready(&self) -> Pin<Box<dyn Future<Output = Result<(), KernelError>> + Send>> {
+        let handle = self.handle;
+        wait_for_network_condition(move || {
+            with_net_core(|core| {
+                let socket = core.sockets.get::<smol_tcp::Socket>(handle);
+                socket.can_send() || !socket.may_send()
+            })
+        })
     }
 
     fn as_file(self: Box<Self>) -> Box<dyn FileOps> {

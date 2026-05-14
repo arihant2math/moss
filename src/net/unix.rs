@@ -8,17 +8,18 @@ use crate::net::sops::{RecvFlags, SendFlags};
 use crate::net::{
     AF_UNIX, SOCK_DGRAM, SOCK_SEQPACKET, SOCK_STREAM, SockAddr, SockAddrUn, SocketOps,
 };
-use crate::sync::SpinLock;
-use crate::sync::{Mutex, OnceLock};
+use crate::sync::{OnceLock, SpinLock};
 use alloc::boxed::Box;
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use async_trait::async_trait;
-use core::future::poll_fn;
-use core::task::Poll;
-use core::task::Waker;
+use core::{
+    future::{Future, poll_fn},
+    pin::Pin,
+    task::{Poll, Waker},
+};
 use libkernel::error::{FsError, KernelError, Result};
 use libkernel::memory::address::UA;
 
@@ -27,10 +28,15 @@ struct Message {
     data: Vec<u8>,
 }
 
+struct DatagramInbox {
+    queue: VecDeque<Message>,
+    waiters: Vec<Waker>,
+}
+
 #[derive(Clone)]
 enum Inbox {
     Pipe(Arc<KPipe>),
-    Datagram(Arc<Mutex<VecDeque<Message>>>),
+    Datagram(Arc<SpinLock<DatagramInbox>>),
 }
 
 impl Inbox {
@@ -39,7 +45,10 @@ impl Inbox {
             SocketType::Stream | SocketType::SeqPacket => {
                 Inbox::Pipe(Arc::new(KPipe::new().expect("KPipe creation failed")))
             }
-            SocketType::Datagram => Inbox::Datagram(Arc::new(Mutex::new(VecDeque::new()))),
+            SocketType::Datagram => Inbox::Datagram(Arc::new(SpinLock::new(DatagramInbox {
+                queue: VecDeque::new(),
+                waiters: Vec::new(),
+            }))),
         }
     }
 
@@ -53,7 +62,14 @@ impl Inbox {
                     sender: origin,
                     data,
                 };
-                queue.lock().await.push_back(msg);
+                let waiters = {
+                    let mut inbox = queue.lock_save_irq();
+                    inbox.queue.push_back(msg);
+                    core::mem::take(&mut inbox.waiters)
+                };
+                for waiter in waiters {
+                    waiter.wake();
+                }
                 Ok(count)
             }
         }
@@ -63,8 +79,8 @@ impl Inbox {
         match self {
             Inbox::Pipe(pipe) => Ok((pipe.copy_to_user(buf, count).await?, None)),
             Inbox::Datagram(queue) => {
-                let mut q = queue.lock().await;
-                if let Some(msg) = q.pop_front() {
+                let msg = queue.lock_save_irq().queue.pop_front();
+                if let Some(msg) = msg {
                     let n = msg.data.len().min(count);
                     copy_to_user_slice(&msg.data[..n], buf).await?;
                     Ok((n, Some(msg.sender)))
@@ -72,6 +88,37 @@ impl Inbox {
                     Ok((0, None))
                 }
             }
+        }
+    }
+
+    fn poll_read_ready(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send>> {
+        match self.clone() {
+            Inbox::Pipe(pipe) => Box::pin(async move {
+                pipe.read_ready().await;
+                Ok(())
+            }),
+            Inbox::Datagram(queue) => Box::pin(async move {
+                poll_fn(move |cx| {
+                    let mut inbox = queue.lock_save_irq();
+                    if !inbox.queue.is_empty() {
+                        Poll::Ready(Ok(()))
+                    } else {
+                        inbox.waiters.push(cx.waker().clone());
+                        Poll::Pending
+                    }
+                })
+                .await
+            }),
+        }
+    }
+
+    fn poll_write_ready(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send>> {
+        match self.clone() {
+            Inbox::Pipe(pipe) => Box::pin(async move {
+                pipe.write_ready().await;
+                Ok(())
+            }),
+            Inbox::Datagram(_) => Box::pin(async { Ok(()) }),
         }
     }
 }
@@ -462,6 +509,47 @@ impl SocketOps for UnixSocket {
             optlen,
         )
         .await
+    }
+
+    fn poll_read_ready(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send>> {
+        if *self.listening.lock_save_irq() {
+            let Some(saun) = *self.local_addr.lock_save_irq() else {
+                return Box::pin(async { Err(KernelError::InvalidValue) });
+            };
+            let Some(path_vec) = UnixSocket::path_bytes(&saun) else {
+                return Box::pin(async { Err(KernelError::InvalidValue) });
+            };
+
+            return Box::pin(async move {
+                poll_fn(move |cx| {
+                    let mut reg = endpoints().lock_save_irq();
+                    let Some(ep) = reg.get_mut(&path_vec) else {
+                        return Poll::Ready(Err(KernelError::InvalidValue));
+                    };
+                    if !ep.pending.is_empty() {
+                        Poll::Ready(Ok(()))
+                    } else {
+                        ep.waiters.push(cx.waker().clone());
+                        Poll::Pending
+                    }
+                })
+                .await
+            });
+        }
+
+        self.inbox.poll_read_ready()
+    }
+
+    fn poll_write_ready(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send>> {
+        match self.socket_type {
+            SocketType::Datagram => Box::pin(async { Ok(()) }),
+            SocketType::Stream | SocketType::SeqPacket => self
+                .peer_inbox
+                .lock_save_irq()
+                .clone()
+                .map(|inbox| inbox.poll_write_ready())
+                .unwrap_or_else(|| Box::pin(async { Ok(()) })),
+        }
     }
 
     fn as_file(self: Box<Self>) -> Box<dyn crate::fs::fops::FileOps> {
