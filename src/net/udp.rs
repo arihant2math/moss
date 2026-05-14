@@ -3,8 +3,8 @@ use crate::fs::open_file::FileCtx;
 use crate::memory::uaccess::{copy_from_user_slice, copy_to_user_slice};
 use crate::net::sops::{RecvFlags, SendFlags, SocketOps};
 use crate::net::{
-    ShutdownHow, SockAddr, allocate_ephemeral_port, poll_network, process_packets,
-    wait_for_network_progress, with_net_core,
+    ShutdownHow, SockAddr, allocate_ephemeral_port, infer_local_ip_for_peer, poll_network,
+    process_packets, wait_for_network_progress, with_net_core,
 };
 use crate::sync::SpinLock;
 use alloc::boxed::Box;
@@ -196,6 +196,15 @@ impl SocketOps for UdpSocket {
 
         self.ensure_bound()?;
         let peer: IpEndpoint = addr.try_into()?;
+        let local_address = {
+            let endpoint = *self.local_endpoint.lock_save_irq();
+            infer_local_ip_for_peer(endpoint.and_then(|endpoint| endpoint.addr), peer)
+        };
+        let metadata = smol_udp::UdpMetadata {
+            endpoint: peer,
+            local_address,
+            meta: smoltcp::phy::PacketMeta::default(),
+        };
         let mut data = vec![0u8; count];
         copy_from_user_slice(buf, &mut data).await?;
         let nonblock = flags.contains(SendFlags::MSG_DONT_WAIT);
@@ -206,10 +215,12 @@ impl SocketOps for UdpSocket {
                 if !socket.can_send() {
                     return Ok(None);
                 }
-                socket.send_slice(&data, peer).map_err(|err| match err {
-                    smol_udp::SendError::BufferFull => KernelError::TryAgain,
-                    smol_udp::SendError::Unaddressable => KernelError::InvalidValue,
-                })?;
+                socket
+                    .send_slice(&data, metadata)
+                    .map_err(|err| match err {
+                        smol_udp::SendError::BufferFull => KernelError::TryAgain,
+                        smol_udp::SendError::Unaddressable => KernelError::InvalidValue,
+                    })?;
                 Ok(Some(()))
             })?
         })

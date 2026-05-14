@@ -8,6 +8,7 @@ use crate::drivers::timer::now;
 use crate::drivers::virtio_hal::VirtioHal;
 use crate::memory::uaccess::{copy_from_user, copy_from_user_slice};
 use crate::sync::{OnceLock, SpinLock};
+use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -17,12 +18,13 @@ use core::time::Duration;
 use libkernel::error::KernelError;
 use libkernel::memory::address::UA;
 use libkernel::sync::waker_set::WakerSet;
-use smoltcp::iface::{Config as IfaceConfig, Interface, SocketSet};
+use smoltcp::iface::{Config as IfaceConfig, Interface, Route, SocketSet};
 use smoltcp::phy::{self, DeviceCapabilities, Medium};
 use smoltcp::socket::tcp as smol_tcp;
 use smoltcp::time::Instant as SmolInstant;
 use smoltcp::wire::{
-    EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpEndpoint, IpListenEndpoint, Ipv4Address,
+    ArpPacket, ArpRepr, EthernetAddress, EthernetFrame, EthernetProtocol, HardwareAddress,
+    IpAddress, IpCidr, IpEndpoint, IpListenEndpoint, Ipv4Address, Ipv4Cidr, Ipv4Packet,
 };
 pub use sops::SocketOps;
 use virtio_drivers::device::net::{RxBuffer, VirtIONet};
@@ -32,6 +34,8 @@ const VIRTIO_NET_QUEUE_SIZE: usize = 16;
 const VIRTIO_NET_RX_BUFFER_LEN: usize = 2048;
 const DEFAULT_IPV4_ADDR: [u8; 4] = [10, 0, 2, 15];
 const DEFAULT_IPV4_GATEWAY: [u8; 4] = [10, 0, 2, 2];
+const LOOPBACK_IPV4_ADDR: [u8; 4] = [127, 0, 0, 1];
+const LOOPBACK_IPV4_PREFIX_LEN: u8 = 8;
 const DEFAULT_WAIT: Duration = Duration::from_millis(10);
 
 static SOCKET_WAIT_QUEUE: OnceLock<SpinLock<WakerSet>> = OnceLock::new();
@@ -41,6 +45,56 @@ static NEXT_EPHEMERAL_PORT: AtomicUsize = AtomicUsize::new(49152);
 
 fn socket_wait_queue() -> &'static SpinLock<WakerSet> {
     SOCKET_WAIT_QUEUE.get_or_init(|| SpinLock::new(WakerSet::new()))
+}
+
+fn loopback_ipv4_addr() -> Ipv4Address {
+    Ipv4Address::from_octets(LOOPBACK_IPV4_ADDR)
+}
+
+pub(crate) fn is_loopback_ip(addr: IpAddress) -> bool {
+    matches!(addr, IpAddress::Ipv4(ipv4) if ipv4.octets()[0] == 127)
+}
+
+pub(crate) fn infer_local_ip_for_peer(
+    bound_local_addr: Option<IpAddress>,
+    peer: IpEndpoint,
+) -> Option<IpAddress> {
+    bound_local_addr
+        .or_else(|| is_loopback_ip(peer.addr).then_some(IpAddress::Ipv4(loopback_ipv4_addr())))
+}
+
+pub(crate) fn normalize_local_endpoint_for_peer(endpoint: &mut IpListenEndpoint, peer: IpEndpoint) {
+    endpoint.addr = infer_local_ip_for_peer(endpoint.addr, peer);
+}
+
+fn is_loopback_frame(frame: &[u8]) -> bool {
+    let Ok(frame) = EthernetFrame::new_checked(frame) else {
+        return false;
+    };
+
+    match frame.ethertype() {
+        EthernetProtocol::Ipv4 => {
+            let Ok(packet) = Ipv4Packet::new_checked(frame.payload()) else {
+                return false;
+            };
+            packet.src_addr().octets()[0] == 127 || packet.dst_addr().octets()[0] == 127
+        }
+        EthernetProtocol::Arp => {
+            let Ok(packet) = ArpPacket::new_checked(frame.payload()) else {
+                return false;
+            };
+            let Ok(ArpRepr::EthernetIpv4 {
+                source_protocol_addr,
+                target_protocol_addr,
+                ..
+            }) = ArpRepr::parse(&packet)
+            else {
+                return false;
+            };
+            source_protocol_addr.octets()[0] == 127 || target_protocol_addr.octets()[0] == 127
+        }
+        _ => false,
+    }
 }
 
 pub const AF_UNIX: i32 = 1;
@@ -63,15 +117,22 @@ struct VirtioNetHardware {
 #[derive(Clone)]
 struct VirtioSmoltcpDevice {
     hw: Arc<SpinLock<VirtioNetHardware>>,
+    loopback_rx: Arc<SpinLock<VecDeque<Vec<u8>>>>,
+}
+
+enum VirtioRxBuffer {
+    Virtio(RxBuffer),
+    Local(Vec<u8>),
 }
 
 struct VirtioRxToken {
     hw: Arc<SpinLock<VirtioNetHardware>>,
-    rx_buf: Option<RxBuffer>,
+    rx_buf: Option<VirtioRxBuffer>,
 }
 
 struct VirtioTxToken {
     hw: Arc<SpinLock<VirtioNetHardware>>,
+    loopback_rx: Arc<SpinLock<VecDeque<Vec<u8>>>>,
 }
 
 struct NetCore {
@@ -94,14 +155,28 @@ impl phy::Device for VirtioSmoltcpDevice {
         &mut self,
         _timestamp: SmolInstant,
     ) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
+        if let Some(packet) = self.loopback_rx.lock_save_irq().pop_front() {
+            return Some((
+                VirtioRxToken {
+                    hw: self.hw.clone(),
+                    rx_buf: Some(VirtioRxBuffer::Local(packet)),
+                },
+                VirtioTxToken {
+                    hw: self.hw.clone(),
+                    loopback_rx: self.loopback_rx.clone(),
+                },
+            ));
+        }
+
         let rx_buf = self.hw.lock_save_irq().net.receive().ok()?;
         Some((
             VirtioRxToken {
                 hw: self.hw.clone(),
-                rx_buf: Some(rx_buf),
+                rx_buf: Some(VirtioRxBuffer::Virtio(rx_buf)),
             },
             VirtioTxToken {
                 hw: self.hw.clone(),
+                loopback_rx: self.loopback_rx.clone(),
             },
         ))
     }
@@ -110,6 +185,7 @@ impl phy::Device for VirtioSmoltcpDevice {
         if self.hw.lock_save_irq().net.can_send() {
             Some(VirtioTxToken {
                 hw: self.hw.clone(),
+                loopback_rx: self.loopback_rx.clone(),
             })
         } else {
             None
@@ -130,13 +206,13 @@ impl phy::RxToken for VirtioRxToken {
     where
         F: FnOnce(&[u8]) -> R,
     {
-        let packet = self
-            .rx_buf
-            .as_ref()
-            .map(RxBuffer::packet)
-            .expect("virtio rx token missing buffer");
+        let packet = match self.rx_buf.as_ref() {
+            Some(VirtioRxBuffer::Virtio(rx_buf)) => rx_buf.packet(),
+            Some(VirtioRxBuffer::Local(packet)) => packet.as_slice(),
+            None => panic!("virtio rx token missing buffer"),
+        };
         let result = f(packet);
-        if let Some(rx_buf) = self.rx_buf.take() {
+        if let Some(VirtioRxBuffer::Virtio(rx_buf)) = self.rx_buf.take() {
             let _ = self.hw.lock_save_irq().net.recycle_rx_buffer(rx_buf);
         }
         result
@@ -145,7 +221,7 @@ impl phy::RxToken for VirtioRxToken {
 
 impl Drop for VirtioRxToken {
     fn drop(&mut self) {
-        if let Some(rx_buf) = self.rx_buf.take() {
+        if let Some(VirtioRxBuffer::Virtio(rx_buf)) = self.rx_buf.take() {
             let _ = self.hw.lock_save_irq().net.recycle_rx_buffer(rx_buf);
         }
     }
@@ -156,9 +232,17 @@ impl phy::TxToken for VirtioTxToken {
     where
         F: FnOnce(&mut [u8]) -> R,
     {
+        let mut buffer = vec![0; len];
+        let result = f(&mut buffer);
+
+        if is_loopback_frame(&buffer) {
+            self.loopback_rx.lock_save_irq().push_back(buffer);
+            return result;
+        }
+
         let mut hw = self.hw.lock_save_irq();
         let mut tx_buf = hw.net.new_tx_buffer(len);
-        let result = f(tx_buf.packet_mut());
+        tx_buf.packet_mut().copy_from_slice(&buffer);
         let _ = hw.net.send(tx_buf);
         result
     }
@@ -197,7 +281,11 @@ pub fn init_virtio_net(transport: MmioTransport<'static>) -> Result<(), KernelEr
         return Err(KernelError::InUse);
     }
 
-    let device = VirtioSmoltcpDevice { hw: hw.clone() };
+    let loopback_rx = Arc::new(SpinLock::new(VecDeque::new()));
+    let device = VirtioSmoltcpDevice {
+        hw: hw.clone(),
+        loopback_rx: loopback_rx.clone(),
+    };
     let mac = hw.lock_save_irq().net.mac_address();
     let mut init_device = device.clone();
     let mut iface = Interface::new(
@@ -208,9 +296,26 @@ pub fn init_virtio_net(transport: MmioTransport<'static>) -> Result<(), KernelEr
 
     let ipv4_addr = Ipv4Address::from_octets(DEFAULT_IPV4_ADDR);
     let gateway = Ipv4Address::from_octets(DEFAULT_IPV4_GATEWAY);
+    let loopback_addr = loopback_ipv4_addr();
     iface.update_ip_addrs(|ips| {
         ips.push(IpCidr::new(IpAddress::Ipv4(ipv4_addr), 24))
             .expect("virtio-net: ip address table full");
+        ips.push(IpCidr::new(
+            IpAddress::Ipv4(loopback_addr),
+            LOOPBACK_IPV4_PREFIX_LEN,
+        ))
+        .expect("virtio-net: ip address table full");
+    });
+    iface.set_any_ip(true);
+    iface.routes_mut().update(|routes| {
+        routes
+            .push(Route {
+                cidr: IpCidr::Ipv4(Ipv4Cidr::new(loopback_addr, LOOPBACK_IPV4_PREFIX_LEN)),
+                via_router: IpAddress::Ipv4(loopback_addr),
+                preferred_until: None,
+                expires_at: None,
+            })
+            .expect("virtio-net: route table full");
     });
     let _ = iface.routes_mut().add_default_ipv4_route(gateway);
 
@@ -223,7 +328,7 @@ pub fn init_virtio_net(transport: MmioTransport<'static>) -> Result<(), KernelEr
         .map_err(|_| KernelError::InUse)?;
 
     log::info!(
-        "virtio-net initialized: mac={:02x?} ipv4={}.{}.{}.{} gw={}.{}.{}.{}",
+        "virtio-net initialized: mac={:02x?} ipv4={}.{}.{}.{} gw={}.{}.{}.{} lo={}.{}.{}.{}",
         mac,
         DEFAULT_IPV4_ADDR[0],
         DEFAULT_IPV4_ADDR[1],
@@ -233,6 +338,10 @@ pub fn init_virtio_net(transport: MmioTransport<'static>) -> Result<(), KernelEr
         DEFAULT_IPV4_GATEWAY[1],
         DEFAULT_IPV4_GATEWAY[2],
         DEFAULT_IPV4_GATEWAY[3],
+        LOOPBACK_IPV4_ADDR[0],
+        LOOPBACK_IPV4_ADDR[1],
+        LOOPBACK_IPV4_ADDR[2],
+        LOOPBACK_IPV4_ADDR[3],
     );
 
     Ok(())

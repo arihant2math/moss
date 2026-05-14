@@ -3,8 +3,9 @@ use crate::fs::open_file::FileCtx;
 use crate::memory::uaccess::{copy_from_user_slice, copy_to_user_slice};
 use crate::net::sops::{RecvFlags, SendFlags, SocketOps};
 use crate::net::{
-    ShutdownHow, SockAddr, allocate_ephemeral_port, poll_network, process_packets,
-    tcp_socket_remote_endpoint, tcp_socket_state, wait_for_network_progress, with_net_core,
+    ShutdownHow, SockAddr, allocate_ephemeral_port, normalize_local_endpoint_for_peer,
+    poll_network, process_packets, tcp_socket_remote_endpoint, tcp_socket_state,
+    wait_for_network_progress, with_net_core,
 };
 use crate::sync::SpinLock;
 use alloc::boxed::Box;
@@ -124,7 +125,9 @@ impl SocketOps for TcpSocket {
 
     async fn connect(&self, addr: SockAddr) -> Result<(), KernelError> {
         let remote_endpoint: IpEndpoint = addr.try_into()?;
-        let local_endpoint = self.normalized_local_endpoint();
+        let mut local_endpoint = self.normalized_local_endpoint();
+        normalize_local_endpoint_for_peer(&mut local_endpoint, remote_endpoint);
+        *self.local_endpoint.lock_save_irq() = Some(local_endpoint);
 
         with_net_core(|core| {
             core.sockets
