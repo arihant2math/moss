@@ -24,6 +24,7 @@ const FUTEX_WAKE: i32 = 1;
 const FUTEX_WAIT_BITSET: i32 = 9;
 const FUTEX_WAKE_BITSET: i32 = 10;
 const FUTEX_PRIVATE_FLAG: i32 = 128;
+const FUTEX_CLOCK_REALTIME: i32 = 256;
 
 type FutexTable = BTreeMap<FutexKey, Arc<SpinLock<WakerSet<u32>>>>;
 
@@ -108,6 +109,9 @@ pub async fn sys_futex(
     } else {
         FutexKey::new_shared(ctx, uaddr)?
     };
+
+    let cmd = cmd & !FUTEX_CLOCK_REALTIME;
+    // TODO: handle realtime clock for timeout
 
     match cmd {
         FUTEX_WAIT | FUTEX_WAIT_BITSET => {
