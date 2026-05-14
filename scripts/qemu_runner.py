@@ -46,7 +46,7 @@ default_args = {
 }
 
 # Arguments that can appear multiple times (e.g. -device)
-extra_args = ["-device", "virtio-rng-device", "-device", "virtio-net-device"]
+extra_args = ["-device", "virtio-rng-device", "-netdev", "user,id=n0,ipv6=off", "-device", "virtio-net-device,netdev=n0"]
 
 if args.debug:
     default_args["-S"] = None
