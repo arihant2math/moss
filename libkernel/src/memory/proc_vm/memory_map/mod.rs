@@ -305,7 +305,7 @@ impl<AS: UserAddressSpace> MemoryMap<AS> {
             return self.shrink_in_place(source_vma, old_region, new_len);
         }
 
-        if self.can_expand_in_place(&source_vma, old_region, new_len) {
+        if self.can_expand_in_place(old_region, new_len) {
             return self.expand_in_place(source_vma, old_region, new_len);
         }
 
@@ -333,21 +333,16 @@ impl<AS: UserAddressSpace> MemoryMap<AS> {
         }
     }
 
-    fn can_expand_in_place(
-        &self,
-        source_vma: &VMArea,
-        old_region: VirtMemoryRegion,
-        new_len: usize,
-    ) -> bool {
-        let new_end = old_region.start_address().add_bytes(new_len);
+    fn can_expand_in_place(&self, old_region: VirtMemoryRegion, new_len: usize) -> bool {
+        let new_region = VirtMemoryRegion::new(old_region.start_address(), new_len);
 
-        if new_end <= source_vma.region.end_address() {
+        if new_region.size() <= old_region.size() {
             return true;
         }
 
         self.is_region_free(VirtMemoryRegion::from_start_end_address(
-            source_vma.region.end_address(),
-            new_end,
+            old_region.end_address(),
+            new_region.end_address(),
         ))
     }
 
@@ -357,21 +352,31 @@ impl<AS: UserAddressSpace> MemoryMap<AS> {
         old_region: VirtMemoryRegion,
         new_len: usize,
     ) -> Result<(VA, Vec<PageFrame>)> {
-        let new_end = old_region.start_address().add_bytes(new_len);
+        let new_region = VirtMemoryRegion::new(old_region.start_address(), new_len);
 
-        if new_end <= source_vma.region.end_address() {
+        if new_region == old_region {
             return Ok((old_region.start_address(), Vec::new()));
         }
+
+        debug_assert!(self.can_expand_in_place(old_region, new_len));
 
         self.vmas
             .remove(&source_vma.region.start_address())
             .unwrap();
 
-        let mut expanded_vma = source_vma;
-        expanded_vma.region =
-            VirtMemoryRegion::from_start_end_address(expanded_vma.region.start_address(), new_end);
+        if source_vma.region.start_address() < old_region.start_address() {
+            self.merge_vma(
+                source_vma.shrink_to(VirtMemoryRegion::from_start_end_address(
+                    source_vma.region.start_address(),
+                    old_region.start_address(),
+                )),
+            );
+        }
 
-        self.merge_vma(expanded_vma);
+        debug_assert_eq!(source_vma.region.end_address(), old_region.end_address());
+
+        let selected_vma = source_vma.shrink_to(old_region);
+        self.merge_vma(Self::relocate_vma(selected_vma, new_region));
 
         Ok((old_region.start_address(), Vec::new()))
     }

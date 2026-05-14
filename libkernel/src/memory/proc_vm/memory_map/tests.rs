@@ -9,7 +9,7 @@ use crate::{
         paging::permissions::PtePermissions,
         proc_vm::{
             address_space::{PageInfo, UserAddressSpace},
-            memory_map::{AddressRequest, MMAP_BASE},
+            memory_map::{AddressRequest, MMAP_BASE, RemapDestination},
             vmarea::{VMAPermissions, VMArea, VMAreaKind, VMFileMapping, tests::DummyTestInode},
         },
         region::VirtMemoryRegion,
@@ -901,4 +901,60 @@ fn test_mprotect_merge_restoration() {
     );
     assert_vma_exists(&pvm, start, size);
     assert_vma_perms(&pvm, start, VMAPermissions::rw());
+}
+
+#[test]
+fn test_mremap_maymove_does_not_expand_into_adjacent_merged_anon_mapping() {
+    let mut pvm: MemoryMap<MockAddressSpace> = MemoryMap::new().unwrap();
+    let first_start = 0x20000;
+    let second_size = 2 * PAGE_SIZE;
+
+    pvm.insert_and_merge(create_anon_vma(
+        first_start,
+        2 * PAGE_SIZE,
+        VMAPermissions::rw(),
+    ));
+
+    let (grown_addr, freed_pages) = pvm
+        .mremap(
+            VA::from_value(first_start),
+            2 * PAGE_SIZE,
+            3 * PAGE_SIZE,
+            RemapDestination::MayMove,
+        )
+        .unwrap();
+    assert!(freed_pages.is_empty());
+    assert_eq!(grown_addr, VA::from_value(first_start));
+    assert_vma_exists(&pvm, first_start, 3 * PAGE_SIZE);
+
+    let second_start = first_start + 3 * PAGE_SIZE;
+    pvm.insert_and_merge(create_anon_vma(
+        second_start,
+        second_size,
+        VMAPermissions::rw(),
+    ));
+
+    // The two adjacent anonymous mappings should merge into one VMA, but a later
+    // mremap of the first allocation must still treat the second allocation as
+    // occupied space and move instead of expanding in place.
+    assert_eq!(pvm.vmas.len(), 1);
+    assert_vma_exists(&pvm, first_start, 5 * PAGE_SIZE);
+
+    let (remapped_addr, freed_pages) = pvm
+        .mremap(
+            VA::from_value(first_start),
+            3 * PAGE_SIZE,
+            4 * PAGE_SIZE,
+            RemapDestination::MayMove,
+        )
+        .unwrap();
+
+    assert!(freed_pages.is_empty());
+    assert_ne!(remapped_addr, VA::from_value(first_start));
+
+    // The adjacent mapping must remain intact at its original address.
+    assert_vma_exists(&pvm, second_start, second_size);
+
+    // And the remapped allocation must exist at the new address with the grown size.
+    assert_vma_exists(&pvm, remapped_addr.value(), 4 * PAGE_SIZE);
 }
