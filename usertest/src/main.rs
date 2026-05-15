@@ -10,6 +10,7 @@ mod epoll;
 mod fs;
 mod futex;
 mod poll;
+mod procfs;
 mod signalfd;
 mod signals;
 mod socket;

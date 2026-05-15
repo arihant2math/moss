@@ -102,8 +102,6 @@ impl Inode for ProcFdInode {
     }
 }
 
-// TODO: Support fd links in /proc/[pid]/fd/
-
 pub struct ProcFdFile {
     id: InodeId,
     attr: FileAttr,
@@ -159,24 +157,52 @@ impl SimpleFile for ProcFdFile {
     }
 
     async fn readlink(&self) -> Result<PathBuf> {
-        if !self.fd_info {
-            if let Some(task) = find_task_by_tid(self.tid) {
-                let Some(file) = task.fd_table.lock_save_irq().get(Fd(self.fd)) else {
-                    return Err(FsError::NotFound.into());
-                };
-                if let Some(path) = file.path() {
-                    Ok(path.to_owned())
-                } else {
-                    // TODO: Find file type
-                    todo!(
-                        "Implement readlink for /proc/[pid]/fd/[fd] when fd doesn't refer to a file with an inode"
-                    )
-                }
-            } else {
-                Err(FsError::NotFound.into())
-            }
-        } else {
-            Err(KernelError::NotSupported)
+        if self.fd_info {
+            return Err(KernelError::NotSupported);
         }
+
+        let task = find_task_by_tid(self.tid).ok_or(FsError::NotFound)?;
+        let file = task
+            .fd_table
+            .lock_save_irq()
+            .get(Fd(self.fd))
+            .ok_or(FsError::NotFound)?;
+
+        if let Some(path) = file.path()
+            && !path.as_str().is_empty()
+        {
+            return Ok(path.to_owned());
+        }
+
+        if let Some(inode) = file.inode() {
+            let attr = inode.getattr().await?;
+            match attr.file_type {
+                FileType::Fifo => return Ok(format!("pipe:[{}]", attr.id.inode_id()).into()),
+                FileType::Socket => {
+                    return Ok(format!("socket:[{}]", attr.id.inode_id()).into());
+                }
+                _ => {}
+            }
+        }
+
+        // Sockets do not yet have real inode numbers in moss. Use the shared
+        // OpenFile allocation address as a stable per-open-file identifier so
+        // duplicated FDs still resolve to the same target string.
+        let synthetic_socket_id = Arc::as_ptr(&file) as usize as u64;
+        let target = {
+            let (ops, _) = &mut *file.lock().await;
+
+            if ops.as_epoll().is_some() {
+                Some(PathBuf::from("anon_inode:[eventpoll]"))
+            } else if ops.as_signalfd().is_some() {
+                Some(PathBuf::from("anon_inode:[signalfd]"))
+            } else if ops.as_socket().is_some() {
+                Some(format!("socket:[{synthetic_socket_id}]").into())
+            } else {
+                None
+            }
+        };
+
+        target.ok_or(KernelError::NotSupported)
     }
 }
