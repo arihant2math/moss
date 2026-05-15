@@ -367,16 +367,16 @@ pub async fn sys_ppoll(
 
     let mut futs = Vec::<PendingPoll>::new();
 
-    for idx in 0..poll_fds.len() {
-        let fd = poll_fds[idx].fd;
-        let events = poll_fds[idx].events;
+    for (idx, poll_fd) in poll_fds.iter_mut().enumerate() {
+        let fd = poll_fd.fd;
+        let events = poll_fd.events;
 
         if fd.as_raw() < 0 {
             continue;
         }
 
         let Some(open_file) = task.fd_table.lock_save_irq().get(fd) else {
-            poll_fds[idx].revents = PollFlags::POLLNVAL;
+            poll_fd.revents = PollFlags::POLLNVAL;
             continue;
         };
 
