@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use core::any::Any;
 use core::sync::atomic::{AtomicU64, Ordering};
 use libkernel::fs::attr::{FileAttr, FilePermissions};
-use libkernel::fs::{BlockDevice, DirStream, Dirent, Filesystem};
+use libkernel::fs::{BlockDevice, DirStream, Dirent, Filesystem, path::Path};
 use libkernel::{
     driver::CharDevDescriptor,
     error::{FsError, KernelError, Result},
@@ -52,17 +52,57 @@ impl DevFs {
         })
     }
 
-    fn insert_device(
+    fn alloc_inode_id(&self) -> InodeId {
+        InodeId::from_fsid_and_inodeid(DEVFS_ID, self.next_inode_id.fetch_add(1, Ordering::SeqCst))
+    }
+
+    fn lookup_dir(&self, path: &Path) -> Result<Arc<DevFsINode>> {
+        let mut current = self.root.clone();
+
+        for component in path.components() {
+            let next = match &current.kind {
+                InodeKind::Directory(children) => children
+                    .lock_save_irq()
+                    .get(component)
+                    .cloned()
+                    .ok_or(FsError::NotFound)?,
+                InodeKind::CharDevice { .. } | InodeKind::BlockDevice { .. } => {
+                    return Err(FsError::NotADirectory.into());
+                }
+            };
+
+            match &next.kind {
+                InodeKind::Directory(..) => current = next,
+                InodeKind::CharDevice { .. } | InodeKind::BlockDevice { .. } => {
+                    return Err(FsError::NotADirectory.into());
+                }
+            }
+        }
+
+        Ok(current)
+    }
+
+    fn parent_dir_and_name(&self, path: &Path) -> Result<(Arc<DevFsINode>, String)> {
+        let name = path.file_name().ok_or(FsError::InvalidInput)?.to_string();
+        let parent = match path.parent() {
+            Some(parent) => self.lookup_dir(parent)?,
+            None => self.root.clone(),
+        };
+
+        Ok((parent, name))
+    }
+
+    fn insert_into_directory(
         &self,
+        dir: &Arc<DevFsINode>,
         name: String,
         file_type: FileType,
         kind: InodeKind,
         permissions: FilePermissions,
         block_size: u32,
     ) -> Result<()> {
-        let InodeKind::Directory(ref children) = self.root.kind else {
-            // This should be impossible as the root is always a directory.
-            return Err(FsError::InvalidFs.into());
+        let InodeKind::Directory(children) = &dir.kind else {
+            return Err(FsError::NotADirectory.into());
         };
 
         let mut children = children.lock_save_irq();
@@ -70,12 +110,8 @@ impl DevFs {
             return Err(KernelError::InUse);
         }
 
-        let id = InodeId::from_fsid_and_inodeid(
-            DEVFS_ID,
-            self.next_inode_id.fetch_add(1, Ordering::SeqCst),
-        );
-
-        let new_inode = Arc::new(DevFsINode {
+        let id = self.alloc_inode_id();
+        let inode = Arc::new(DevFsINode {
             id,
             attr: SpinLock::new(FileAttr {
                 id,
@@ -87,8 +123,20 @@ impl DevFs {
             kind,
         });
 
-        children.insert(name, new_inode);
+        children.insert(name, inode);
         Ok(())
+    }
+
+    pub fn mkdir(&self, path: &Path, permissions: FilePermissions) -> Result<()> {
+        let (parent, name) = self.parent_dir_and_name(path)?;
+        self.insert_into_directory(
+            &parent,
+            name,
+            FileType::Directory,
+            InodeKind::Directory(SpinLock::new(BTreeMap::new())),
+            permissions,
+            0,
+        )
     }
 
     pub fn mknod(
@@ -97,7 +145,25 @@ impl DevFs {
         device_id: CharDevDescriptor,
         permissions: FilePermissions,
     ) -> Result<()> {
-        self.insert_device(
+        self.insert_into_directory(
+            &self.root,
+            name,
+            FileType::CharDevice(device_id),
+            InodeKind::CharDevice { device_id },
+            permissions,
+            0,
+        )
+    }
+
+    pub fn mknod_path(
+        &self,
+        path: &Path,
+        device_id: CharDevDescriptor,
+        permissions: FilePermissions,
+    ) -> Result<()> {
+        let (parent, name) = self.parent_dir_and_name(path)?;
+        self.insert_into_directory(
+            &parent,
             name,
             FileType::CharDevice(device_id),
             InodeKind::CharDevice { device_id },
@@ -113,7 +179,8 @@ impl DevFs {
         permissions: FilePermissions,
         block_size: u32,
     ) -> Result<()> {
-        self.insert_device(
+        self.insert_into_directory(
+            &self.root,
             name,
             FileType::BlockDevice(device_id),
             InodeKind::BlockDevice { device_id },

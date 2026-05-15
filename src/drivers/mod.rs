@@ -26,6 +26,7 @@ pub mod display;
 pub mod fdt_prober;
 pub mod fs;
 pub mod init;
+pub mod input;
 pub mod interrupts;
 pub mod net;
 pub mod probe;
@@ -43,7 +44,8 @@ pub enum ReservedMajors {
     Console = 5,
     Fb = 6,
     Uart = 10,
-    End = 11,
+    Input = 13,
+    End = 14,
 }
 
 pub trait Driver: Send + Sync + Any {
