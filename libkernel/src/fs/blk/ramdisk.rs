@@ -3,13 +3,7 @@
 use crate::{
     error::{IoError, KernelError, Result},
     fs::BlockDevice,
-    memory::{
-        PAGE_SIZE,
-        address::{TVA, VA},
-        paging::permissions::PtePermissions,
-        proc_vm::address_space::KernAddressSpace,
-        region::{PhysMemoryRegion, VirtMemoryRegion},
-    },
+    memory::{PAGE_SIZE, ramdisk::Ramdisk},
 };
 use alloc::boxed::Box;
 use async_trait::async_trait;
@@ -17,38 +11,22 @@ use core::ptr;
 
 /// A block device backed by a region of RAM.
 pub struct RamdiskBlkDev {
-    base: TVA<u8>,
+    rd: Ramdisk,
     num_blocks: u64,
 }
 
 const BLOCK_SIZE: usize = PAGE_SIZE;
 
 impl RamdiskBlkDev {
-    /// Creates a new ramdisk.
-    ///
-    /// Maps the given physical memory region into the kernel's address space at
-    /// the specified virtual base address.
-    pub fn new<K: KernAddressSpace>(
-        region: PhysMemoryRegion,
-        base: VA,
-        kern_addr_spc: &mut K,
-    ) -> Result<Self> {
-        kern_addr_spc.map_normal(
-            region,
-            VirtMemoryRegion::new(base, region.size()),
-            PtePermissions::rw(false),
-        )?;
-
-        if !region.size().is_multiple_of(BLOCK_SIZE) {
+    /// Take in a ramdisk (reference struct) and create a block device over it
+    pub fn new(rd: Ramdisk) -> Result<Self> {
+        if !rd.len().is_multiple_of(BLOCK_SIZE) {
             return Err(KernelError::InvalidValue);
         }
 
-        let num_blocks = (region.size() / BLOCK_SIZE) as u64;
+        let num_blocks = (rd.len() / BLOCK_SIZE) as u64;
 
-        Ok(Self {
-            base: TVA::from_value(base.value()),
-            num_blocks,
-        })
+        Ok(Self { rd, num_blocks })
     }
 }
 
@@ -74,7 +52,7 @@ impl BlockDevice for RamdiskBlkDev {
             // 1. We have successfully mapped the ramdisk into virtual memory,
             //    starting at base.
             // 2. We have bounds checked the access.
-            let src_ptr = self.base.as_ptr().add(offset);
+            let src_ptr = self.rd.base().as_ptr().add(offset);
 
             ptr::copy_nonoverlapping(src_ptr, buf.as_mut_ptr(), buf.len());
         }
@@ -96,7 +74,7 @@ impl BlockDevice for RamdiskBlkDev {
         let offset = block_id as usize * BLOCK_SIZE;
 
         unsafe {
-            let dest_ptr = self.base.as_ptr_mut().add(offset);
+            let dest_ptr = self.rd.base().as_ptr_mut().add(offset);
 
             ptr::copy_nonoverlapping(buf.as_ptr(), dest_ptr, buf.len());
         }

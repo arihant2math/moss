@@ -23,16 +23,17 @@ use getargs::{Opt, Options};
 use libkernel::{
     CpuOps,
     fs::{
-        BlockDevice, OpenFlags, attr::FilePermissions, blk::ramdisk::RamdiskBlkDev, path::Path,
-        pathbuf::PathBuf,
+        BlockDevice, OpenFlags, attr::FilePermissions, blk::ramdisk::RamdiskBlkDev, cpio::is_cpio,
+        initramfs::unpack_cpio, path::Path, pathbuf::PathBuf,
     },
     memory::{
         address::{PA, VA},
         proc_vm::address_space::VirtualMemory,
+        ramdisk::Ramdisk,
         region::PhysMemoryRegion,
     },
 };
-use log::{error, warn};
+use log::{error, info, warn};
 use process::ctx::UserCtx;
 use sched::{
     sched_init, spawn_kernel_work, syscall_ctx::ProcessCtx, uspc_ret::dispatch_userspace_task,
@@ -93,8 +94,7 @@ async fn launch_init(mut ctx: ProcessCtx, mut opts: KOptions) {
 
     let dt = get_fdt();
 
-    let initrd_block_dev: Option<Box<dyn BlockDevice>> = if let Some(chosen) =
-        dt.find_nodes("/chosen").next()
+    let initrd = if let Some(chosen) = dt.find_nodes("/chosen").next()
         && let Some(start_addr) = chosen
             .find_property("linux,initrd-start")
             .map(|prop| prop.u64())
@@ -107,14 +107,14 @@ async fn launch_init(mut ctx: ProcessCtx, mut opts: KOptions) {
             PA::from_value(end_addr as _),
         );
 
-        Some(Box::new(
-            RamdiskBlkDev::new(
+        Some(
+            Ramdisk::map(
                 region,
                 VA::from_value(0xffff_9800_0000_0000),
                 &mut *ArchImpl::kern_address_space().lock_save_irq(),
             )
-            .unwrap(),
-        ))
+            .unwrap_or_else(|_| panic!("could not map initrd")),
+        )
     } else {
         None
     };
@@ -126,13 +126,36 @@ async fn launch_init(mut ctx: ProcessCtx, mut opts: KOptions) {
         clock::realtime::set_date(time);
     }
 
-    let root_fs = opts
-        .root_fs
-        .unwrap_or_else(|| panic!("No root FS driver specified in kernel command line"));
+    match initrd {
+        // If initrd is cpio, it is initramfs
+        // We unpack into tmpfs instead of mount as a block device
+        Some(rd) if is_cpio(rd.as_bytes()) => {
+            VFS.mount_root("tmpfs", None)
+                .await
+                .unwrap_or_else(|_| panic!("Failed to mount initramfs root"));
 
-    VFS.mount_root(&root_fs, initrd_block_dev)
-        .await
-        .unwrap_or_else(|e| panic!("Failed to mount root FS: {e}"));
+            unpack_cpio(rd.as_bytes(), VFS.root_inode())
+                .await
+                .unwrap_or_else(|_| panic!("Failed to unpack initramfs"));
+
+            info!("Unpacked initramfs");
+        }
+        initrd => {
+            let root_fs = opts
+                .root_fs
+                .unwrap_or_else(|| panic!("No rootfs driver found"));
+            let blkdev = initrd.map(|rd| {
+                Box::new(
+                    RamdiskBlkDev::new(rd)
+                        .unwrap_or_else(|_| panic!("Could not load initrd block device")),
+                ) as Box<dyn BlockDevice>
+            });
+
+            VFS.mount_root(&root_fs, blkdev)
+                .await
+                .unwrap_or_else(|_| panic!("Failed to mount rootfs"));
+        }
+    }
 
     // Process all automounts.
     for (path, fs) in opts.automounts.iter() {

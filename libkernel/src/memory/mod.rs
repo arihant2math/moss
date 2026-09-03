@@ -20,6 +20,8 @@ pub mod page;
 pub mod paging;
 #[cfg(feature = "proc_vm")]
 pub mod proc_vm;
+#[cfg(feature = "proc_vm")]
+pub mod ramdisk;
 pub mod region;
 
 /// The system page size in bytes (4 KiB).

@@ -3,6 +3,13 @@
 create-image:
     ./scripts/create-image.sh
 
+create-initramfs:
+    #!/usr/bin/env sh
+    if [ ! -f build/rootfs ]; then
+    just create-image
+    fi
+    ./scripts/create-initramfs.sh
+
 run:
     #!/usr/bin/env sh
     # Create moss.img if it doesn't exist

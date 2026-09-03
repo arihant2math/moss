@@ -160,6 +160,10 @@ pub enum FsError {
     /// Attempted to rename across devices.
     #[error("Attempted to rename from cross device")]
     CrossDevice,
+
+    /// TODO: find a better palce to put this
+    #[error("Cpio error")]
+    CpioError,
 }
 
 /// Errors that occur when loading or parsing an executable.
