@@ -229,7 +229,7 @@ Threads:\t{tasks}\n",
                             if vma.permissions().read { "r" } else { "-" },
                             if vma.permissions().write { "w" } else { "-" },
                             if vma.permissions().execute { "x" } else { "-" },
-                            "p", // Don't suport shared mappings... yet!
+                            if vma.is_shared() { "s" } else { "p" },
                             vma.file_offset().unwrap_or_default(),
                             vma.name()
                         ));

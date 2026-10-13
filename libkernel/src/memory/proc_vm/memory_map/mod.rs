@@ -103,19 +103,42 @@ impl<AS: UserAddressSpace> MemoryMap<AS> {
     pub fn mmap(
         &mut self,
         requested_address: AddressRequest,
-        mut len: usize,
+        len: usize,
         perms: VMAPermissions,
         kind: VMAreaKind,
         name: String,
     ) -> Result<VA> {
+        self.mmap_impl(requested_address, len, perms, kind, name, false)
+            .map(|(address, _)| address)
+    }
+
+    /// Creates fresh backing, returning replaced frames for the caller to release.
+    pub fn mmap_replacing(
+        &mut self,
+        requested_address: AddressRequest,
+        len: usize,
+        perms: VMAPermissions,
+        kind: VMAreaKind,
+        name: String,
+    ) -> Result<(VA, Vec<PageFrame>)> {
+        self.mmap_impl(requested_address, len, perms, kind, name, true)
+    }
+
+    fn mmap_impl(
+        &mut self,
+        requested_address: AddressRequest,
+        mut len: usize,
+        perms: VMAPermissions,
+        kind: VMAreaKind,
+        name: String,
+        replace: bool,
+    ) -> Result<(VA, Vec<PageFrame>)> {
         if len == 0 {
             return Err(KernelError::InvalidValue);
         }
 
         // Ensure the length is page-aligned.
-        if len & PAGE_MASK != 0 {
-            len = (len & !PAGE_MASK) + PAGE_SIZE;
-        }
+        len = len.checked_add(PAGE_MASK).ok_or(KernelError::NoMemory)? & !PAGE_MASK;
 
         let region = match requested_address {
             AddressRequest::Any => self.find_free_region(len).ok_or(KernelError::NoMemory)?,
@@ -153,15 +176,21 @@ impl<AS: UserAddressSpace> MemoryMap<AS> {
             }
         };
 
-        // At this point, `start_addr` points to a valid, free region.
-        // We can now create and insert the new VMA, handling merges.
+        // Fresh mmap replaces old pages, unlike VMA permission updates.
+        let pages = if replace {
+            self.unmap_region(region, None)?
+        } else {
+            Vec::new()
+        };
+
+        // Create and insert the new VMA, handling merges.
         let mut new_vma = VMArea::new(region, kind, perms);
 
         new_vma.set_name(name);
 
         self.insert_and_merge(new_vma);
 
-        Ok(region.start_address())
+        Ok((region.start_address(), pages))
     }
 
     /// Unmaps a region of memory, similar to the `munmap` syscall.
@@ -208,10 +237,14 @@ impl<AS: UserAddressSpace> MemoryMap<AS> {
             .map(|x| x.region.start_address())
             .ok_or(KernelError::NoMemory)?;
 
-        let affected_vma = self
-            .vmas
-            .remove(&affected_vma_addr)
-            .expect("Should have the same key as the start address");
+        let affected_vma = self.vmas[&affected_vma_addr].clone();
+        // Reject unsupported ranges without deleting the existing VMA.
+        if !affected_vma.region.contains(protect_region) {
+            return Err(KernelError::NoMemory);
+        }
+        self.address_space
+            .protect_range(protect_region, new_perms.into())?;
+        self.vmas.remove(&affected_vma_addr);
 
         // Easy case, the entire VMA is changing.
         if affected_vma.region == protect_region {
@@ -219,9 +252,7 @@ impl<AS: UserAddressSpace> MemoryMap<AS> {
             let mut new_vma = old_vma.clone();
             new_vma.permissions = new_perms;
 
-            self.insert_and_merge(new_vma.clone());
-            self.address_space
-                .protect_range(protect_region, new_perms.into())?;
+            self.insert_and_merge(new_vma);
 
             return Ok(());
         }
@@ -236,8 +267,6 @@ impl<AS: UserAddressSpace> MemoryMap<AS> {
                 self.insert_and_merge(affected_vma.shrink_to(left));
             }
 
-            self.address_space
-                .protect_range(protect_region, new_perms.into())?;
             self.insert_and_merge(new_vma);
 
             if let Some(right) = right {
@@ -753,8 +782,9 @@ impl<AS: UserAddressSpace> MemoryMap<AS> {
         for vma in new_vmas.values() {
             let mut pte_perms = PtePermissions::from(vma.permissions);
 
-            // Mark all writable pages as CoW.
-            if pte_perms.is_write() {
+            // Shared mappings stay shared across fork; private writable
+            // mappings become CoW.
+            if !vma.is_shared() && pte_perms.is_write() {
                 pte_perms = pte_perms.into_cow();
             }
 

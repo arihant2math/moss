@@ -92,10 +92,7 @@ impl UserAddressSpace for Arm64ProcessAddressSpace {
         };
 
         walk_and_modify_region(self.l0_table, va_range, &mut walk_ctx, |_, desc| {
-            match (perms.is_execute(), perms.is_read(), perms.is_write()) {
-                (false, false, false) => desc.mark_as_swapped(),
-                _ => desc.set_permissions(perms),
-            }
+            desc.set_permissions(perms)
         })
     }
 

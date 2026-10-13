@@ -7,6 +7,7 @@ use libkernel::{
         address::VA,
         address_space::{AccessKind, PageInfo, UserAddressSpace},
         paging::permissions::PtePermissions,
+        proc_vm::vmarea::VMAreaKind,
     },
 };
 
@@ -54,8 +55,33 @@ pub fn handle_demand_fault(
     }
     .clone();
 
-    let mut new_page = ClaimedPage::alloc_zeroed()?;
     let page_va = faulting_addr.page_aligned();
+
+    if let VMAreaKind::SharedAnon(mapping) = vma.kind() {
+        let offset = page_va.value() - vma.region.start_address().value();
+        let frame = mapping.claim_page(offset)?;
+        // SAFETY: claim_page transfers an owned allocator reference to us.
+        let shared_page = unsafe { ClaimedPage::from_pfn(frame) };
+
+        return match vm.mm_mut().address_space_mut().map_page(
+            frame,
+            page_va,
+            vma.permissions().into(),
+        ) {
+            Ok(()) => {
+                // Transfer only this extra reference to the page table.
+                shared_page.leak();
+                Ok(FaultResolution::Resolved)
+            }
+            Err(KernelError::MappingError(MapError::AlreadyMapped)) => {
+                // The owned extra reference is dropped, not the backing page.
+                Ok(FaultResolution::Resolved)
+            }
+            Err(e) => Err(e),
+        };
+    }
+
+    let mut new_page = ClaimedPage::alloc_zeroed()?;
 
     if let Some(vma_read) = vma.resolve_fault(faulting_addr) {
         drop(vm);

@@ -170,7 +170,23 @@ macro_rules! define_descriptor {
                         reg.modify(BlockPageFields::COW::NotCowShared)
                     }
 
-                    Self(reg.get())
+                    // User mappings are leaf pages. PROT_NONE keeps their
+                    // frame but is invalid to hardware; CoW must stay valid so
+                    // writes trigger protection faults, not demand faults.
+                    // Preserve existing block descriptor semantics: swapped
+                    // blocks cannot yet be demoted by the generic walker.
+                    let map_bits = if $map_bits == 0b11
+                        && !perms.is_read()
+                        && !perms.is_write()
+                        && !perms.is_execute()
+                        && !perms.is_cow()
+                    {
+                        0b10
+                    } else {
+                        $map_bits
+                    };
+
+                    Self((reg.get() & !0b11) | map_bits)
                 }
             }
 

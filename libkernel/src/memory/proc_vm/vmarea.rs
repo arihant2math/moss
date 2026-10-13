@@ -12,9 +12,10 @@
 use core::cmp;
 
 use crate::{
+    error::{KernelError, Result},
     fs::{Inode, InodeId},
     memory::{
-        PAGE_MASK, PAGE_SIZE, address::VA, address_space::AccessKind,
+        PAGE_MASK, PAGE_SIZE, address::VA, address_space::AccessKind, page::PageFrame,
         paging::permissions::PtePermissions, region::VirtMemoryRegion,
     },
 };
@@ -141,6 +142,44 @@ impl VMFileMapping {
     }
 }
 
+/// A demand-paged backing object shared by anonymous mappings across fork.
+pub trait SharedAnonBacking: Send + Sync {
+    /// Claims one owned frame reference at a page-aligned byte offset.
+    ///
+    /// The backing retains its own reference. The caller must either install
+    /// the returned reference in a page table or release it on failure.
+    fn claim_page(&self, offset: usize) -> Result<PageFrame>;
+}
+
+/// A slice of a shared anonymous backing object.
+#[derive(Clone)]
+pub struct VMSharedMapping {
+    backing: Arc<dyn SharedAnonBacking>,
+    offset: usize,
+}
+
+impl PartialEq for VMSharedMapping {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.backing, &other.backing) && self.offset == other.offset
+    }
+}
+
+impl VMSharedMapping {
+    /// Creates a mapping starting at the beginning of a backing object.
+    pub fn new(backing: Arc<dyn SharedAnonBacking>) -> Self {
+        Self { backing, offset: 0 }
+    }
+
+    /// Claims a frame at a page-aligned byte offset relative to this mapping.
+    pub fn claim_page(&self, offset: usize) -> Result<PageFrame> {
+        let offset = self
+            .offset
+            .checked_add(offset)
+            .ok_or(KernelError::InvalidValue)?;
+        self.backing.claim_page(offset)
+    }
+}
+
 /// Defines the backing source for a `VMArea`.
 #[derive(Clone, PartialEq)]
 pub enum VMAreaKind {
@@ -158,6 +197,9 @@ pub enum VMAreaKind {
     /// physical page that has been zero-filled. This is used for the heap,
     /// and the stack.
     Anon,
+
+    /// The VMA shares a demand-paged anonymous backing object.
+    SharedAnon(VMSharedMapping),
 }
 
 impl VMAreaKind {
@@ -324,7 +366,7 @@ impl VMArea {
     pub fn resolve_fault(&self, faulting_addr: VA) -> Option<VMAFileRead> {
         // Match on the kind of VMA. If it's anonymous, there's no file to read from.
         let mapping = match &self.kind {
-            VMAreaKind::Anon => return None,
+            VMAreaKind::Anon | VMAreaKind::SharedAnon(_) => return None,
             VMAreaKind::File(mapping) => mapping,
         };
 
@@ -403,6 +445,11 @@ impl VMArea {
         match (&self.kind, &other.kind) {
             (VMAreaKind::Anon, VMAreaKind::Anon) => true,
 
+            (VMAreaKind::SharedAnon(left), VMAreaKind::SharedAnon(right)) => {
+                Arc::ptr_eq(&left.backing, &right.backing)
+                    && left.offset.checked_add(self.region.size()) == Some(right.offset)
+            }
+
             (VMAreaKind::File(self_map), VMAreaKind::File(other_map)) => {
                 // Check that they point to the same inode.
                 let same_file = Arc::ptr_eq(&self_map.file, &other_map.file);
@@ -423,6 +470,10 @@ impl VMArea {
     pub(super) fn clone_with_new_region(&self, new_region: VirtMemoryRegion) -> Self {
         let mut clone = self.clone();
 
+        if let VMAreaKind::SharedAnon(mapping) = &mut clone.kind {
+            mapping.offset +=
+                new_region.start_address().value() - self.region.start_address().value();
+        }
         clone.region = new_region;
 
         clone
@@ -432,6 +483,11 @@ impl VMArea {
     /// mapping.
     pub fn is_file_backed(&self) -> bool {
         matches!(self.kind, VMAreaKind::File(_))
+    }
+
+    /// Returns whether this VMA was created as a shared mapping.
+    pub fn is_shared(&self) -> bool {
+        matches!(self.kind, VMAreaKind::SharedAnon(_))
     }
 
     /// Shrink this VMA's region to `new_region`, recalculating file offsets,
@@ -466,7 +522,7 @@ impl VMArea {
 
                 new_vma
             }
-            VMAreaKind::Anon => new_vma,
+            VMAreaKind::Anon | VMAreaKind::SharedAnon(_) => new_vma,
         }
     }
 
@@ -479,7 +535,7 @@ impl VMArea {
     pub fn file_offset(&self) -> Option<u64> {
         match self.kind {
             VMAreaKind::File(ref vmfile_mapping) => Some(vmfile_mapping.offset()),
-            VMAreaKind::Anon => None,
+            VMAreaKind::Anon | VMAreaKind::SharedAnon(_) => None,
         }
     }
 
@@ -487,7 +543,7 @@ impl VMArea {
     pub fn inode_id(&self) -> Option<InodeId> {
         match self.kind {
             VMAreaKind::File(ref vmfile_mapping) => Some(vmfile_mapping.file().id()),
-            VMAreaKind::Anon => None,
+            VMAreaKind::Anon | VMAreaKind::SharedAnon(_) => None,
         }
     }
 
